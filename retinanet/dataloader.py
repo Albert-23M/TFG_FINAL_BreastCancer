@@ -360,6 +360,7 @@ class Resizer(object):
         image = skimage.transform.resize(image, (int(round(rows*scale)), int(round((cols*scale)))))
         rows, cols, cns = image.shape
 
+        # para imagenes de mamografias ==> usar 600(w)x800(h)
         pad_w = 32 - rows%32
         pad_h = 32 - cols%32
 

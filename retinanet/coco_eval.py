@@ -43,6 +43,10 @@ def calculate_iou(box1, box2):
             iou_matrix[i][j] = iou
     return iou_matrix
 
+def evaluate_coco_validation(dataset, model, iou_threshold=0.75):
+    pass
+
+
 def evaluate_coco(dataset, model, iou_threshold=0.75):
     model.eval()
     with torch.no_grad():

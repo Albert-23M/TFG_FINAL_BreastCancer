@@ -23,7 +23,7 @@ from PIL import Image
 class CocoDataset(Dataset):
     """Coco dataset."""
 
-    def __init__(self, root_dir, set_name='train2017', transform=None):
+    def __init__(self, root_dir, set_name='coco_mass_train', transform=None):
         """
         Args:
             root_dir (string): COCO directory.

@@ -12,6 +12,10 @@ import matplotlib.pyplot as plt
 
 print('CUDA available: {}'.format(torch.cuda.is_available()))
 
+print(torch.cuda.is_available())  # Debe imprimir True
+print(torch.cuda.device_count())  # Número de GPUs disponibles
+print(torch.cuda.get_device_name(0))  # Nombre de la GPU
+
 def main(args=None):
     parser = argparse.ArgumentParser(description='Simple training script for training a RetinaNet network.')
     parser.add_argument('--dataset', help='Dataset type, must be one of csv or coco.')
@@ -20,7 +24,7 @@ def main(args=None):
     parser.add_argument('--csv_classes', help='Path to file containing class list (see readme)')
     parser.add_argument('--csv_val', help='Path to file containing validation annotations (optional, see readme)')
     parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
-    parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
+    parser.add_argument('--epochs', help='Number of epochs', type=int, default=100) # default=100
 
     parser = parser.parse_args(args)
 
@@ -29,9 +33,9 @@ def main(args=None):
         if parser.coco_path is None:
             raise ValueError('Must provide --coco_path when training on COCO,')
         
-        dataset_train = CocoDataset(parser.coco_path, set_name='train2017',
+        dataset_train = CocoDataset(parser.coco_path, set_name='coco_mass_train',
                                     transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
-        dataset_val = CocoDataset(parser.coco_path, set_name='val2017',
+        dataset_val = CocoDataset(parser.coco_path, set_name='coco_mass_test',
                                   transform=transforms.Compose([Normalizer(), Resizer()]))
 
     elif parser.dataset == 'csv':
@@ -45,7 +49,7 @@ def main(args=None):
     else:
         raise ValueError('Dataset type not understood (must be csv or coco), exiting.')
 
-    sampler = AspectRatioBasedSampler(dataset_train, batch_size=4, drop_last=False)
+    sampler = AspectRatioBasedSampler(dataset_train, batch_size=16, drop_last=False)
     dataloader_train = DataLoader(dataset_train, num_workers=3, collate_fn=collater, batch_sampler=sampler)
 
     if dataset_val:
@@ -70,18 +74,18 @@ def main(args=None):
     epoch_losses = []
 
     # Diccionario para guardar el historial
-    training_history = {"train_loss": [], "val_loss": []}
+    training_history = {"train_loss": [], "val_loss": [], "sensitivity": [], "fppi": []}
 
     for epoch_num in range(parser.epochs):
         retinanet.train()
         retinanet.module.freeze_bn()
 
         epoch_loss = []
-
+        
         for iter_num, data in enumerate(dataloader_train):
             try:
                 # plot con las bbox
-                break
+                # break
                 optimizer.zero_grad()
                 classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot']])
                 classification_loss, regression_loss = classification_loss.mean(), regression_loss.mean()
@@ -113,11 +117,29 @@ def main(args=None):
         if dataset_val:
             print('Evaluating dataset...')
             if parser.dataset == 'coco':
-                val_loss = coco_eval.evaluate_coco(dataset_val, retinanet)  # Devuelve alguna métrica?
+                results = coco_eval.evaluate_coco(dataset_val, retinanet)
             elif parser.dataset == 'csv':
-                val_loss = csv_eval.evaluate(dataset_val, retinanet)
+                results = coco_eval.csv_eval.evaluate(dataset_val, retinanet)
 
-            training_history["val_loss"].append(val_loss if val_loss is not None else 0)
+            print("------------------------------------------------------")
+            for threshold, metrics in results.items():
+                tp = metrics['tp']
+                fp = metrics['fp']
+                num_total_gt_bboxes = metrics['num_total_gt_bboxes']
+
+                sensitivity = tp / (tp + (num_total_gt_bboxes - tp)) if (tp + (num_total_gt_bboxes - tp)) > 0 else 0
+                fppi = fp / num_total_gt_bboxes if num_total_gt_bboxes > 0 else 0
+                """
+                print(f"Threshold: {threshold:.2f}")
+                print(f"  Sensitivity: {sensitivity:.4f}")
+                print(f"  TP: {tp}")
+                print(f"  FP: {fp}")
+                print(f"  NUM_TOTAL_BBOXES: {num_total_gt_bboxes}")
+                print(f"  FPPI: {fppi:.4f}")
+                print("------------------------------------------------------")
+                """
+                training_history["sensitivity"].append(sensitivity)
+                training_history["fppi"].append(fppi)
 
         scheduler.step(mean_train_loss)
         torch.save(retinanet.module, f'{parser.dataset}_retinanet_{epoch_num}.pt')
@@ -125,26 +147,39 @@ def main(args=None):
     retinanet.eval()
     torch.save(retinanet, 'model_final.pt')
 
-    # Graficar la pérdida de entrenamiento y validación
     plot_training_history(training_history)
+
 
 def plot_training_history(training_history):
     plt.figure(figsize=(10, 5))
-    
-    epochs = range(len(training_history["train_loss"]))
-    
-    plt.plot(epochs, training_history["train_loss"], label='Train Loss', marker='o')
-    if len(training_history["val_loss"]) > 0:
-        plt.plot(epochs, training_history["val_loss"], label='Validation Loss', marker='o')
-    
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.title('Training and Validation Loss')
+
+    # Sensitivity vs FPPI
+    plt.plot(training_history["fppi"], training_history["sensitivity"], label='Sensitivity vs FPPI', marker='o', color='r')
+
+    plt.xlabel('False Positives Per Image (FPPI)')
+    plt.ylabel('Sensitivity')
+    plt.title('Sensitivity vs FPPI')
     plt.legend()
     plt.grid()
     
-    plt.savefig('training_history.png')
+    plt.savefig('sensitivity_vs_fppi.png')
+    plt.show()
+
+    # Plot de Train Loss y Validation Loss
+    plt.figure(figsize=(10, 5))
+    plt.plot(training_history["train_loss"], label='Train Loss', marker='o', color='b')
+    if "val_loss" in training_history and len(training_history["val_loss"]) > 0:
+        plt.plot(training_history["val_loss"], label='Validation Loss', marker='o', color='g')
+
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.title('Train Loss and Validation Loss')
+    plt.legend()
+    plt.grid()
+
+    plt.savefig('train_val_loss.png')
     plt.show()
 
 if __name__ == '__main__':
     main()
+

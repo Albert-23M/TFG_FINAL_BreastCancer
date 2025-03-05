@@ -16,15 +16,46 @@ def draw_boxes(image, boxes, labels, scores=None, color=(0, 255, 0)):
         cv2.putText(image, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     return image
 
-def evaluate_coco(dataset, model, threshold=0.05):
+def calculate_iou(box1, box2):
+    """
+    Calcula el IoU (Intersection over Union) entre dos bounding boxes.
+    """
+    iou_matrix = [[0 for _ in range(len(box2))] for _ in range(len(box1))]
+    for i, b1 in enumerate(box1):
+        for j, b2 in enumerate(box2):
+            x1, y1, w1, h1 = b1
+            x2, y2, w2, h2 = b2
+            x1_min, y1_min = x1, y1
+            x1_max, y1_max = x1 + w1, y1 + h1
+            x2_min, y2_min = x2, y2
+            x2_max, y2_max = x2 + w2, y2 + h2
+            x_inter_min = max(x1_min, x2_min)
+            y_inter_min = max(y1_min, y2_min)
+            x_inter_max = min(x1_max, x2_max)
+            y_inter_max = min(y1_max, y2_max)
+            inter_width = max(0, x_inter_max - x_inter_min)
+            inter_height = max(0, y_inter_max - y_inter_min)
+            inter_area = inter_width * inter_height
+            area1 = w1 * h1
+            area2 = w2 * h2
+            union_area = area1 + area2 - inter_area
+            iou = inter_area / union_area if union_area != 0 else 0
+            iou_matrix[i][j] = iou
+    return iou_matrix
+
+def evaluate_coco(dataset, model, iou_threshold=0.75):
     model.eval()
     with torch.no_grad():
-        results = []
-        image_ids = []
-        random_indices = random.sample(range(len(dataset)), 10)
-        saved_images = 0
+        thresholds = [round(x, 2) for x in np.arange(0.01, 1.00, 0.1)]
+        results = {threshold: {'tp': 0, 'fp': 0, 'num_total_gt_bboxes': 0} for threshold in thresholds}
         
-        for index in range(len(dataset)):
+        num_images = len(dataset)
+        random_indices = random.sample(range(len(dataset)), 2)
+        wantToSave = True
+        saved_images = 0
+        exp_name = "exp_1"
+        
+        for index in range(len(dataset)):          
             data = dataset[index]
             scale = data['scale']
             
@@ -33,73 +64,59 @@ def evaluate_coco(dataset, model, threshold=0.05):
             else:
                 scores, labels, boxes = model(data['img'].permute(2, 0, 1).float().unsqueeze(dim=0))
                 
-            scores = scores.cpu()
-            labels = labels.cpu()
-            boxes = boxes.cpu()
-            # boxes /= scale
-
+            scores = scores.cpu().numpy()
+            labels = labels.cpu().numpy()
+            boxes = boxes.cpu().numpy()
+            boxes /= scale
+            
             if boxes.shape[0] > 0:
                 boxes[:, 2] -= boxes[:, 0]
                 boxes[:, 3] -= boxes[:, 1]
-
-                for box_id in range(boxes.shape[0]):
-                    score = float(scores[box_id])
-                    label = int(labels[box_id])
-                    box = boxes[box_id, :]
-
-                    if score < threshold:
-                        break
-
-                    image_result = {
-                        'image_id': dataset.image_ids[index],
-                        'category_id': dataset.label_to_coco_label(label),
-                        'score': float(score),
-                        'bbox': box.tolist(),
-                    }
-                    results.append(image_result)
-
-            image_ids.append(dataset.image_ids[index])
-            print('{}/{}'.format(index, len(dataset)), end='\r')
-
-            # Guardar imágenes con bboxes (10 imágenes aleatorias)
             
-            if index in random_indices and saved_images < 2:
-                img = data['img'].numpy()
-                img = (img * 255).astype(np.uint8)
-                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-                gt_boxes = data['annot'][:, :4].cpu().numpy()
-                gt_labels = data['annot'][:, 4].cpu().numpy()
-
-                pred_boxes = boxes.numpy()
-                pred_labels = labels.numpy()
-                pred_scores = scores.numpy()
-
-                print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-                print("Image shape ==> ", img.shape)
-                print("gt_boxes =======>>>> ", gt_boxes)
-                print()
-                print("pred_boxes =============>  ", pred_boxes)
-                '''
-                gt_image = draw_boxes(img.copy(), gt_boxes, gt_labels, color=(255, 0, 0))
-                pred_image = draw_boxes(img.copy(), pred_boxes, pred_labels, pred_scores, color=(0, 255, 0))
-
-                cv2.imwrite(f'ground_truth_{index}.jpg', gt_image)
-                cv2.imwrite(f'prediction_{index}.jpg', pred_image)
-                '''
+            gt_boxes = data['annot'][:, :4].cpu().numpy()
+            for idx in range(gt_boxes.shape[0]):
+                gt_boxes[idx][2] = gt_boxes[idx][2] - gt_boxes[idx][0]
+                gt_boxes[idx][3] = gt_boxes[idx][3] - gt_boxes[idx][1]
+            
+            gt_labels = data['annot'][:, 4].cpu().numpy()
+            num_total_gt_bboxes = len(gt_boxes)
+            
+            for threshold in thresholds:
+                tp = 0
+                fp = 0
+                
+                valid_indices = scores >= threshold
+                filtered_boxes = boxes[valid_indices]
+                filtered_labels = labels[valid_indices]
+                filtered_scores = scores[valid_indices]
+                
+                iou_values = calculate_iou(gt_boxes, filtered_boxes * scale)
+                
+                for i, ious in enumerate(iou_values):
+                    max_iou = max(ious) if len(ious) > 0 else 0
+                    if max_iou >= iou_threshold:
+                        tp += 1
+                    else:
+                        fp += 1
+                
+                results[threshold]['tp'] += tp
+                results[threshold]['fp'] += fp
+                results[threshold]['num_total_gt_bboxes'] += num_total_gt_bboxes
+            
+            img = data['img'].numpy()
+            img = (img - img.min())*(255/(img.max() - img.min()))
+            img = img.astype(np.uint8)
+            
+            gt_image = draw_boxes(img.copy(), gt_boxes, gt_labels, color=(255, 0, 0))
+            pred_image = draw_boxes(img.copy(), boxes * scale, labels, scores, color=(0, 255, 0))
+            
+            if wantToSave and (index in random_indices) and (saved_images < 2):
+                cv2.imwrite(f'resultados_imagenes/{exp_name}/ground_truth_{index}.jpg', gt_image)
+                cv2.imwrite(f'resultados_imagenes/{exp_name}/prediction_{index}.jpg', pred_image)
+                iou_values = calculate_iou(gt_boxes, (boxes * scale))
                 saved_images += 1
             
-
-        if not results:
-            return
-
-        json.dump(results, open(f'{dataset.set_name}_bbox_results.json', 'w'), indent=4)
-        coco_true = dataset.coco
-        coco_pred = coco_true.loadRes(f'{dataset.set_name}_bbox_results.json')
-        coco_eval = COCOeval(coco_true, coco_pred, 'bbox')
-        coco_eval.params.imgIds = image_ids
-        coco_eval.evaluate()
-        coco_eval.accumulate()
-        coco_eval.summarize()
+            print(f'Procesando imagen {index+1}/{num_images}', end='\r')
+    
     model.train()
-    return
+    return results

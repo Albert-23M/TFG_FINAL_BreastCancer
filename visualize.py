@@ -36,7 +36,7 @@ def main(args=None):
 	parser = parser.parse_args(args)
 
 	if parser.dataset == 'coco':
-		dataset_val = CocoDataset(parser.coco_path, set_name='train2017', transform=transforms.Compose([Normalizer(), Resizer()]))
+		dataset_val = CocoDataset(parser.coco_path, set_name='coco_mass_train', transform=transforms.Compose([Normalizer(), Resizer()]))
 	elif parser.dataset == 'csv':
 		dataset_val = CSVDataset(train_file=parser.csv_train, class_list=parser.csv_classes, transform=transforms.Compose([Normalizer(), Resizer()]))
 	else:

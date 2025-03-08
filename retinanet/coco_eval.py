@@ -48,18 +48,19 @@ def evaluate_coco_validation(dataset, model, iou_threshold=0.75):
 
 
 def evaluate_coco(dataset, model, iou_threshold=0.75):
+    print("---------------------------------------------------------------------------------------------------------------------------")
     model.eval()
     with torch.no_grad():
         thresholds = [round(x, 2) for x in np.arange(0.01, 1.00, 0.1)]
         results = {threshold: {'tp': 0, 'fp': 0, 'num_total_gt_bboxes': 0} for threshold in thresholds}
         
         num_images = len(dataset)
-        random_indices = random.sample(range(len(dataset)), 2)
+        random_indices = [3, 4]  # random.sample(range(len(dataset)), 2)
         wantToSave = True
         saved_images = 0
         exp_name = "exp_1"
-        
-        for index in range(len(dataset)):          
+        print("---------------------------------------------------------------------------------------------------------------------------")
+        for index in range(len(dataset)):
             data = dataset[index]
             scale = data['scale']
             
@@ -84,7 +85,7 @@ def evaluate_coco(dataset, model, iou_threshold=0.75):
             
             gt_labels = data['annot'][:, 4].cpu().numpy()
             num_total_gt_bboxes = len(gt_boxes)
-            
+            print("---------------------------------------------------------------------------------------------------------------------------")
             for threshold in thresholds:
                 tp = 0
                 fp = 0
@@ -102,7 +103,7 @@ def evaluate_coco(dataset, model, iou_threshold=0.75):
                         tp += 1
                     else:
                         fp += 1
-                
+                print("---------------------------------------------------------------------------------------------------------------------------")
                 results[threshold]['tp'] += tp
                 results[threshold]['fp'] += fp
                 results[threshold]['num_total_gt_bboxes'] += num_total_gt_bboxes
@@ -113,10 +114,10 @@ def evaluate_coco(dataset, model, iou_threshold=0.75):
             
             gt_image = draw_boxes(img.copy(), gt_boxes, gt_labels, color=(255, 0, 0))
             pred_image = draw_boxes(img.copy(), boxes * scale, labels, scores, color=(0, 255, 0))
-            
+            print("---------------------------------------------------------------------------------------------------------------------------")
             if wantToSave and (index in random_indices) and (saved_images < 2):
-                cv2.imwrite(f'resultados_imagenes/{exp_name}/ground_truth_{index}.jpg', gt_image)
-                cv2.imwrite(f'resultados_imagenes/{exp_name}/prediction_{index}.jpg', pred_image)
+                cv2.imwrite(f'/home/albert/research/retinanet/pytorch-retinanet/resultados_imagenes/{exp_name}/ground_truth_{index}.jpg', gt_image)
+                cv2.imwrite(f'/home/albert/research/retinanet/pytorch-retinanet/resultados_imagenes/{exp_name}/prediction_{index}.jpg', pred_image)
                 iou_values = calculate_iou(gt_boxes, (boxes * scale))
                 saved_images += 1
             
@@ -124,3 +125,4 @@ def evaluate_coco(dataset, model, iou_threshold=0.75):
     
     model.train()
     return results
+

@@ -12,10 +12,6 @@ import matplotlib.pyplot as plt
 
 print('CUDA available: {}'.format(torch.cuda.is_available()))
 
-print(torch.cuda.is_available())  # Debe imprimir True
-print(torch.cuda.device_count())  # Número de GPUs disponibles
-print(torch.cuda.get_device_name(0))  # Nombre de la GPU
-
 def main(args=None):
     parser = argparse.ArgumentParser(description='Simple training script for training a RetinaNet network.')
     parser.add_argument('--dataset', help='Dataset type, must be one of csv or coco.')
@@ -24,7 +20,8 @@ def main(args=None):
     parser.add_argument('--csv_classes', help='Path to file containing class list (see readme)')
     parser.add_argument('--csv_val', help='Path to file containing validation annotations (optional, see readme)')
     parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
-    parser.add_argument('--epochs', help='Number of epochs', type=int, default=5) # default=100
+    parser.add_argument('--epochs', help='Number of epochs', type=int, default=1) # default=100
+    parser.add_argument('--patience', help='Early stopping patience', type=int, default=10)
 
     parser = parser.parse_args(args)
 
@@ -49,11 +46,11 @@ def main(args=None):
     else:
         raise ValueError('Dataset type not understood (must be csv or coco), exiting.')
 
-    sampler = AspectRatioBasedSampler(dataset_train, batch_size=16, drop_last=False)
+    sampler = AspectRatioBasedSampler(dataset_train, batch_size=8, drop_last=False)
     dataloader_train = DataLoader(dataset_train, num_workers=3, collate_fn=collater, batch_sampler=sampler)
 
     if dataset_val:
-        sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=4, drop_last=False)
+        sampler_val = AspectRatioBasedSampler(dataset_val, batch_size=8, drop_last=False)
         dataloader_val = DataLoader(dataset_val, num_workers=3, collate_fn=collater, batch_sampler=sampler_val)
 
     # Crear el modelo
@@ -71,20 +68,17 @@ def main(args=None):
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
 
     loss_hist = collections.deque(maxlen=500)
-    epoch_losses = []
 
     # Diccionario para guardar el historial
     training_history = {"train_loss": [], "val_loss": [], "sensitivity": [], "fppi": []}
-    # loss_hist_val = []
-    
+    # best_val_loss = float('inf')
+    # early_stop_counter = 0
 
     for epoch_num in range(parser.epochs):
         retinanet.train()
         retinanet.module.freeze_bn()
 
         epoch_loss = []
-        epoch_loss_val = []
-        
 
         for iter_num, data in enumerate(dataloader_train):
             try:
@@ -102,7 +96,7 @@ def main(args=None):
                 torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
                 optimizer.step()
 
-                # loss_hist.append(float(loss))
+                loss_hist.append(float(loss))
                 epoch_loss.append(float(loss))
 
                 # print(f'Epoch: {epoch_num} | Iter: {iter_num} | Cls loss: {classification_loss:.5f} | '
@@ -112,39 +106,38 @@ def main(args=None):
             except Exception as e:
                 print(e)
                 continue
-            
         
         mean_train_loss = np.mean(epoch_loss)
         training_history["train_loss"].append(mean_train_loss)
         print(f'Epoch {epoch_num} | Train Loss: {mean_train_loss:.5f}')
+        
+        """
+        # Dataset_val evaluation
+        if dataset_val:
+            retinanet.eval()
+            val_losses = []
 
-        ## val
-        retinanet.eval()
-        with torch.no_grad():
-            for iter_num, data in enumerate(dataloader_val):
-                try:
-                    # plot con las bbox
-                    # break
-                    
+            with torch.no_grad():  # Desactiva el cálculo de gradientes para validación
+                for data in dataloader_val:
                     classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot']])
                     classification_loss, regression_loss = classification_loss.mean(), regression_loss.mean()
                     loss = classification_loss + regression_loss
+                    val_losses.append(float(loss))
 
-                    epoch_loss_val.append(float(loss))
-
-                    # print(f'Epoch: {epoch_num} | Iter: {iter_num} | Cls loss: {classification_loss:.5f} | '
-                    #     f'Reg loss: {regression_loss:.5f} | Loss: {np.mean(loss_hist):.5f}')
-
-                    del classification_loss, regression_loss
-                except Exception as e:
-                    print(e)
-                    continue
+            mean_val_loss = np.mean(val_losses)
+            training_history["val_loss"].append(mean_val_loss)
+            print(f'Epoch {epoch_num} | Val Loss: {mean_val_loss:.5f}')
             
-            mean_train_loss = np.mean(epoch_loss_val)
-            training_history["val_loss"].append(mean_train_loss)
-
+            if mean_val_loss < best_val_loss:
+                best_val_loss = mean_val_loss
+                early_stop_counter = 0
+            else:
+                early_stop_counter += 1
+                if early_stop_counter >= parser.patience:
+                    print(f"Early stopping triggered after {epoch_num+1} epochs.")
+                    break
+            """
         # Evaluación en el dataset de validación
-        """
         if dataset_val:
             print('Evaluating dataset...')
             if parser.dataset == 'coco':
@@ -160,7 +153,7 @@ def main(args=None):
 
                 sensitivity = tp / (tp + (num_total_gt_bboxes - tp)) if (tp + (num_total_gt_bboxes - tp)) > 0 else 0
                 fppi = fp / num_total_gt_bboxes if num_total_gt_bboxes > 0 else 0
-                
+                """
                 print(f"Threshold: {threshold:.2f}")
                 print(f"  Sensitivity: {sensitivity:.4f}")
                 print(f"  TP: {tp}")
@@ -168,14 +161,13 @@ def main(args=None):
                 print(f"  NUM_TOTAL_BBOXES: {num_total_gt_bboxes}")
                 print(f"  FPPI: {fppi:.4f}")
                 print("------------------------------------------------------")
-                
+                """
                 training_history["sensitivity"].append(sensitivity)
                 training_history["fppi"].append(fppi)
-        """
-        
+
         scheduler.step(mean_train_loss)
         torch.save(retinanet.module, f'{parser.dataset}_retinanet_{epoch_num}.pt')
-        
+
     retinanet.eval()
     torch.save(retinanet, 'model_final.pt')
 
@@ -200,8 +192,7 @@ def plot_training_history(training_history):
     # Plot de Train Loss y Validation Loss
     plt.figure(figsize=(10, 5))
     plt.plot(training_history["train_loss"], label='Train Loss', color='b')
-    if "val_loss" in training_history and len(training_history["val_loss"]) > 0:
-        plt.plot(training_history["val_loss"], label='Validation Loss', color='g')
+    plt.plot(training_history["val_loss"], label='Validation Loss', color='g')
 
     plt.xlabel('Epochs')
     plt.ylabel('Loss')

@@ -35,7 +35,7 @@ def main(args=None):
         saved_model = torch.load(parser.model_path)
         if isinstance(saved_model, torch.nn.DataParallel):
             saved_model = saved_model.module  # Extrae el modelo del contenedor DataParallel
-        retinanet.load_state_dict(saved_model.state_dict())
+        retinanet.load_state_dict(saved_model.state_dict()) # El error esta aqui
         # retinanet.load_state_dict(torch.load(parser.model_path, weights_only=True))
         retinanet = torch.nn.DataParallel(retinanet).cuda()
     else:

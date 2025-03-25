@@ -89,15 +89,19 @@ def non_maximum_suppression(boxes, scores, iou_threshold=0.5):
     boxes = boxes.astype(np.float32)
     
     # Compute (x1, y1, x2, y2) coordinates for easier IoU computation
+    """
     x1 = boxes[:, 0]
     y1 = boxes[:, 1]
     x2 = boxes[:, 0] + boxes[:, 2]
     y2 = boxes[:, 1] + boxes[:, 3]
+    """
     
     # Sort the boxes by score (highest first)
     indices = np.argsort(scores)[::-1]
     keep = []
-    
+    # TODO:
+    # debugar esta funcion
+
     while indices.size > 0:
         current = indices[0]
         keep.append(current)
@@ -127,7 +131,7 @@ def non_maximum_suppression(boxes, scores, iou_threshold=0.5):
     
     return keep
 
-def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
+def evaluate_coco(dataset, model, iou_threshold=0.5, nms_iou_threshold=0.75):
     """
     Evaluate the COCO validation dataset with the given model.
     Now integrated with non maximum suppression (NMS).
@@ -144,14 +148,12 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
     model.eval()
     with torch.no_grad():
         # thresholds = [round(x, 2) for x in np.arange(0.01, 1.00, 0.1)]
-        thresholds = np.logspace(-3, 0, 50)
-        print(thresholds)
-        results = {threshold: {'tp': 0, 'fp': 0, 'fn': 0, 'tpr': 0, 'fppi': 0, 'num_total_gt_bboxes': 0} for threshold in thresholds}
+        results = {'tp': 0, 'fp': 0, 'fn': 0, 'tpr': 0, 'fppi': 0, 'num_total_gt_bboxes': 0}
         
         num_images = len(dataset)
         
-        random_indices = [1,2,3,4,5,6]# random.sample(range(len(dataset)), 6)
-        wantToSave = False
+        random_indices = [1,2,3,4,5,6] # random.sample(range(len(dataset)), 6)
+        wantToSave = True
         saved_images = 0
         
         for index in range(len(dataset)):
@@ -181,52 +183,50 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
             gt_labels = data['annot'][:, 4].cpu().numpy()
             num_total_gt_bboxes = len(gt_boxes)
             
-            for threshold in thresholds:
-                tp = 0
-                fp = 0
-                fn = 0
-                
-                # Filter out predictions below the current score threshold
-                
-                valid_indices = scores >= threshold
-                filtered_boxes = boxes[valid_indices]
-                filtered_labels = labels[valid_indices]
-                filtered_scores = scores[valid_indices]
-                
-                
-                # --- APPLY NON MAXIMUM SUPPRESSION ---
-                keep_indices = non_maximum_suppression(filtered_boxes, filtered_scores, iou_threshold=nms_iou_threshold)
-                # antes era asi: filtered_boxes = filtered_boxes[keep_indices]
-                filtered_boxes = filtered_boxes[keep_indices]
-                filtered_labels = filtered_labels[keep_indices]
-                filtered_scores = filtered_scores[keep_indices]
-                # ------------------------------------
-                
-                # Multiply boxes back by scale to bring them to original image coordinates
-                # (this is necessary if your ground truths are in original coordinates)
-                iou_values = calculate_iou(gt_boxes, filtered_boxes * scale)
-                matched_gt_indices = set()
-                matched_preds = set()
-                # For each ground truth box, check if there is any prediction with IoU >= iou_threshold
-                for i, ious in enumerate(iou_values):
-                    max_iou, max_iou_ind = 0, -1
-                    for j, iou in enumerate(ious):
-                        if iou > max_iou:
-                            max_iou = iou
-                            max_iou_ind = j
-                    if max_iou >= iou_threshold:
-                        tp += 1
-                        matched_gt_indices.add(i)
-                        matched_preds.add(max_iou_ind)
-                        
-                fp = len(iou_values[0]) - len(matched_preds)
-                fn = num_total_gt_bboxes - len(matched_gt_indices)
-                
-                # Update results for this threshold
-                results[threshold]['tp'] += tp
-                results[threshold]['fp'] += fp
-                results[threshold]['fn'] += fn
-                results[threshold]['num_total_gt_bboxes'] += num_total_gt_bboxes
+            tp = 0
+            fp = 0
+            fn = 0
+            
+            # --- APPLY NON MAXIMUM SUPPRESSION ---
+            keep_indices = non_maximum_suppression(boxes, scores, iou_threshold=nms_iou_threshold)
+            # antes era asi: filtered_boxes = filtered_boxes[keep_indices]
+            filtered_boxes = boxes[keep_indices]
+            filtered_labels = boxes[keep_indices]
+            filtered_scores = boxes[keep_indices]
+            # ------------------------------------
+            
+            # Multiply boxes back by scale to bring them to original image coordinates
+            # (this is necessary if your ground truths are in original coordinates)
+            iou_values = calculate_iou(gt_boxes, filtered_boxes * scale)
+            matched_gt_indices = set()
+            matched_preds = set()
+            # For each ground truth box, check if there is any prediction with IoU >= iou_threshold
+            for i, ious in enumerate(iou_values):
+                max_iou, max_iou_ind = 0, -1
+                for j, iou in enumerate(ious):
+                    if iou > max_iou:
+                        max_iou = iou
+                        max_iou_ind = j
+                if max_iou >= iou_threshold:
+                    tp += 1
+                    matched_gt_indices.add(i)
+                    matched_preds.add(max_iou_ind)
+            fp = len(iou_values[0]) - len(matched_preds)
+                # max_iou = max(ious) if len(ious) > 0 else 0
+                # if max_iou >= iou_threshold:
+                #     tp += 1
+                #     matched_gt_indices.add(i)
+                # else:
+                #     fp += 1
+
+            
+            fn = num_total_gt_bboxes - len(matched_gt_indices)
+            
+            # Update results for this threshold
+            results['tp'] += tp
+            results['fp'] += fp
+            results['fn'] += fn
+            results['num_total_gt_bboxes'] += num_total_gt_bboxes
             
             if wantToSave and (index in random_indices) and (saved_images < 6):
                 # Visualization part (optional)
@@ -238,53 +238,29 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
                 comparison_image = draw_boxes(img.copy(), gt_boxes, gt_labels, filtered_boxes * scale, labels, scores, ious)
 
                 # Guardar imágenes solo si están en los índices aleatorios y quedan menos de 6 guardadas
-                cv2.imwrite(f'comparison_{index}_withScoresFilter.jpg', comparison_image)
+                cv2.imwrite(f'comparison_{index}-fullMammoES.jpg', comparison_image)
                 saved_images += 1
             
             print(f'Processing image {index+1}/{num_images}', end='\r')
     
     # Calcular tpr y FPPI al final para cada umbral
-    for threshold in thresholds:
-        tp = results[threshold]['tp']
-        fp = results[threshold]['fp']
-        num_total_gt_bboxes = results[threshold]['num_total_gt_bboxes']
-        
-        # tpr = FP / (FP + num_total_gt_boxes (1))
-        results[threshold]['tpr'] = fp / (fp + num_total_gt_bboxes) if (fp + num_total_gt_bboxes) > 0 else 0
-        
-        # FPPI = FP / Número de imágenes
-        results[threshold]['fppi'] = fp / num_images if num_images > 0 else 0
+    tp = results['tp']
+    fp = results['fp']
+    fn = results['fn']
+    num_total_gt_bboxes = results['num_total_gt_bboxes']
+    # TODO:
+    # HACERLO CON TPR@FPPI
+    # TPR = TP / (TP + FN)
+
+    results['tpr'] = tp / (tp + fn) if (tp + fn)  > 0 else 0
+    
+    # FPPI = FP / Número de imágenes
+    results['fppi'] = fp / num_images if num_images > 0 else 0
     
     model.train()
-    # Print only TPR and FPPI for each threshold
-    for threshold in thresholds:
-        print(f"Threshold: {threshold}, TPR: {results[threshold]['tpr']:.4f}, FPPI: {results[threshold]['fppi']:.4f}")
-    plot_tpr_fppi(results)
+    # Print only tpr and FPPI for each threshold
+    
+    print(f"tpr: {results['tpr']:.4f}, FPPI: {results['fppi']:.4f}")
     # print("Results: ", results)
     return results
 
-
-def plot_tpr_fppi(results):
-    """
-    Plotea la curva TPR@FPPI basada en los resultados de evaluación.
-
-    :param results: Diccionario con los umbrales como claves y valores que contienen 'tp', 'fn', y 'fppi'.
-    """
-    # Extraer valores de threshold, TPR y FPPI de los resultados
-    thresholds = sorted(results.keys())  # Ordenar los umbrales
-    tpr_values = [results[t]['tpr'] for t in thresholds]
-    fppi_values = [results[t]['fppi'] for t in thresholds]
-
-    # Crear la gráfica
-    plt.figure(figsize=(8, 6))
-    plt.plot(fppi_values, tpr_values, marker='o', linestyle='-', color='b', label="TPR@FPPI")
-
-    # Etiquetas y título
-    plt.xlabel("False Positives Per Image (FPPI)")
-    plt.ylabel("True Positive Rate (TPR)")
-    plt.title("TPR@FPPI Curve")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('tpr_vs_fppi.png')
-    # Mostrar la gráfica
-    plt.show()

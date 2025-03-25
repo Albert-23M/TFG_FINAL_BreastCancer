@@ -6,48 +6,52 @@ from retinanet import model
 from retinanet.dataloader import CocoDataset, Resizer, Normalizer
 from retinanet import coco_eval
 
-# assert torch.__version__.split('.')[0] == '1'
-
 print('CUDA available: {}'.format(torch.cuda.is_available()))
 
-
 def main(args=None):
-    parser = argparse.ArgumentParser(description='Simple training script for training a RetinaNet network.')
+    parser = argparse.ArgumentParser(description='Script for evaluating a RetinaNet model on COCO validation set.')
 
-    parser.add_argument('--coco_path', help='Path to COCO directory')
-    parser.add_argument('--model_path', help='Path to model', type=str)
+    parser.add_argument('--coco_path', help='Path to COCO directory', required=True)
+    parser.add_argument('--model_path', help='Path to trained model', type=str, required=True)
 
     parser = parser.parse_args(args)
-    print(" ************************************** ", parser.coco_path)
+
+    print(f'Loading COCO dataset from: {parser.coco_path}')
+    
     dataset_val = CocoDataset(parser.coco_path, set_name='coco_mass_test',
                               transform=transforms.Compose([Normalizer(), Resizer()]))
 
-    # Create the model
-    retinanet = model.resnet50(num_classes=dataset_val.num_classes(), pretrained=True)
+    print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    print(f"Lengt of dataset: {len(dataset_val)}")
 
-    use_gpu = True
+    print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
-    if use_gpu:
-        if torch.cuda.is_available():
-            retinanet = retinanet.cuda()
 
+    # Cargar modelo
     if torch.cuda.is_available():
-        saved_model = torch.load(parser.model_path)
-        if isinstance(saved_model, torch.nn.DataParallel):
-            saved_model = saved_model.module  # Extrae el modelo del contenedor DataParallel
-        retinanet.load_state_dict(saved_model.state_dict()) # El error esta aqui
-        # retinanet.load_state_dict(torch.load(parser.model_path, weights_only=True))
-        retinanet = torch.nn.DataParallel(retinanet).cuda()
+        retinanet = torch.load(parser.model_path)
     else:
-        retinanet.load_state_dict(torch.load(parser.model_path))
-        retinanet = torch.nn.DataParallel(retinanet)
+        retinanet = torch.load(parser.model_path, map_location=torch.device('cpu'))
+
+    if isinstance(retinanet, torch.nn.DataParallel):
+        retinanet = retinanet.module  # Extrae modelo si estaba en DataParallel
+
+    retinanet = torch.nn.DataParallel(retinanet).cuda() if torch.cuda.is_available() else torch.nn.DataParallel(retinanet)
 
     retinanet.training = False
     retinanet.eval()
-    retinanet.module.freeze_bn()
-    # retinanet.freeze_bn()
-    coco_eval.evaluate_coco(dataset_val, retinanet)
 
+    # Método alternativo para congelar BatchNorm si es necesario
+    def freeze_bn(module):
+        if isinstance(module, torch.nn.BatchNorm2d):
+            module.eval()
+            module.weight.requires_grad = False
+            module.bias.requires_grad = False
+
+    retinanet.apply(freeze_bn)
+
+    print("Evaluating model on COCO validation set...")
+    coco_eval.evaluate_coco(dataset_val, retinanet)
 
 if __name__ == '__main__':
     main()

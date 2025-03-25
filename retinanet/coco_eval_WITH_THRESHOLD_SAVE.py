@@ -143,9 +143,7 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
     """
     model.eval()
     with torch.no_grad():
-        # thresholds = [round(x, 2) for x in np.arange(0.01, 1.00, 0.1)]
-        thresholds = np.logspace(-3, 0, 50)
-        print(thresholds)
+        thresholds = [round(x, 2) for x in np.arange(0.01, 1.00, 0.1)]
         results = {threshold: {'tp': 0, 'fp': 0, 'fn': 0, 'tpr': 0, 'fppi': 0, 'num_total_gt_bboxes': 0} for threshold in thresholds}
         
         num_images = len(dataset)
@@ -195,11 +193,11 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
                 
                 
                 # --- APPLY NON MAXIMUM SUPPRESSION ---
-                keep_indices = non_maximum_suppression(filtered_boxes, filtered_scores, iou_threshold=nms_iou_threshold)
+                keep_indices = non_maximum_suppression(filtered_boxes, scores, iou_threshold=nms_iou_threshold)
                 # antes era asi: filtered_boxes = filtered_boxes[keep_indices]
                 filtered_boxes = filtered_boxes[keep_indices]
-                filtered_labels = filtered_labels[keep_indices]
-                filtered_scores = filtered_scores[keep_indices]
+                filtered_labels = filtered_boxes[keep_indices]
+                filtered_scores = filtered_boxes[keep_indices]
                 # ------------------------------------
                 
                 # Multiply boxes back by scale to bring them to original image coordinates
@@ -218,7 +216,7 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
                         tp += 1
                         matched_gt_indices.add(i)
                         matched_preds.add(max_iou_ind)
-                        
+                
                 fp = len(iou_values[0]) - len(matched_preds)
                 fn = num_total_gt_bboxes - len(matched_gt_indices)
                 
@@ -259,32 +257,6 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
     # Print only TPR and FPPI for each threshold
     for threshold in thresholds:
         print(f"Threshold: {threshold}, TPR: {results[threshold]['tpr']:.4f}, FPPI: {results[threshold]['fppi']:.4f}")
-    plot_tpr_fppi(results)
     # print("Results: ", results)
     return results
 
-
-def plot_tpr_fppi(results):
-    """
-    Plotea la curva TPR@FPPI basada en los resultados de evaluación.
-
-    :param results: Diccionario con los umbrales como claves y valores que contienen 'tp', 'fn', y 'fppi'.
-    """
-    # Extraer valores de threshold, TPR y FPPI de los resultados
-    thresholds = sorted(results.keys())  # Ordenar los umbrales
-    tpr_values = [results[t]['tpr'] for t in thresholds]
-    fppi_values = [results[t]['fppi'] for t in thresholds]
-
-    # Crear la gráfica
-    plt.figure(figsize=(8, 6))
-    plt.plot(fppi_values, tpr_values, marker='o', linestyle='-', color='b', label="TPR@FPPI")
-
-    # Etiquetas y título
-    plt.xlabel("False Positives Per Image (FPPI)")
-    plt.ylabel("True Positive Rate (TPR)")
-    plt.title("TPR@FPPI Curve")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('tpr_vs_fppi.png')
-    # Mostrar la gráfica
-    plt.show()

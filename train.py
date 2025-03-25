@@ -20,8 +20,7 @@ def main(args=None):
     parser.add_argument('--csv_classes', help='Path to file containing class list (see readme)')
     parser.add_argument('--csv_val', help='Path to file containing validation annotations (optional, see readme)')
     parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
-    parser.add_argument('--epochs', help='Number of epochs', type=int, default=1) # default=100
-    parser.add_argument('--patience', help='Early stopping patience', type=int, default=10)
+    parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
 
     parser = parser.parse_args(args)
 
@@ -32,7 +31,7 @@ def main(args=None):
         
         dataset_train = CocoDataset(parser.coco_path, set_name='coco_mass_train',
                                     transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
-        dataset_val = CocoDataset(parser.coco_path, set_name='coco_mass_test',
+        dataset_val = CocoDataset(parser.coco_path, set_name='coco_mass_val',
                                   transform=transforms.Compose([Normalizer(), Resizer()]))
 
     elif parser.dataset == 'csv':
@@ -68,11 +67,22 @@ def main(args=None):
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
 
     loss_hist = collections.deque(maxlen=500)
+    epoch_losses = []
 
-    # Diccionario para guardar el historial
-    training_history = {"train_loss": [], "val_loss": [], "sensitivity": [], "fppi": []}
-    # best_val_loss = float('inf')
-    # early_stop_counter = 0
+    
+    thresholds = [round(x, 2) for x in np.arange(0.01, 1.00, 0.1)]
+    # Diccionarios para guardar el historial
+    training_history = {"train_loss": [], "val_loss": []}
+    val_data_history = {'tp': [], 'fp': [], 'fn': [], 'tpr': [], 'fppi': [], 'num_total_gt_bboxes': []}
+
+
+    best_ap = 0.0  # Mejor AP encontrada
+    epochs_no_improve = 0  # Contador de épocas sin mejora
+    patience = 20  # Número de épocas permitidas sin mejora
+
+    print(f"Lengt of dataset_train: {len(dataset_train)}")
+    print(f"Lengt of dataset_val: {len(dataset_val)}")
+
 
     for epoch_num in range(parser.epochs):
         retinanet.train()
@@ -82,8 +92,6 @@ def main(args=None):
 
         for iter_num, data in enumerate(dataloader_train):
             try:
-                # plot con las bbox
-                # break
                 optimizer.zero_grad()
                 classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot']])
                 classification_loss, regression_loss = classification_loss.mean(), regression_loss.mean()
@@ -96,113 +104,133 @@ def main(args=None):
                 torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
                 optimizer.step()
 
-                loss_hist.append(float(loss))
                 epoch_loss.append(float(loss))
-
-                # print(f'Epoch: {epoch_num} | Iter: {iter_num} | Cls loss: {classification_loss:.5f} | '
-                  #     f'Reg loss: {regression_loss:.5f} | Loss: {np.mean(loss_hist):.5f}')
 
                 del classification_loss, regression_loss
             except Exception as e:
                 print(e)
                 continue
-        
+
         mean_train_loss = np.mean(epoch_loss)
         training_history["train_loss"].append(mean_train_loss)
         print(f'Epoch {epoch_num} | Train Loss: {mean_train_loss:.5f}')
-        
-        """
-        # Dataset_val evaluation
-        if dataset_val:
-            retinanet.eval()
-            val_losses = []
 
-            with torch.no_grad():  # Desactiva el cálculo de gradientes para validación
-                for data in dataloader_val:
-                    classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot']])
-                    classification_loss, regression_loss = classification_loss.mean(), regression_loss.mean()
-                    loss = classification_loss + regression_loss
-                    val_losses.append(float(loss))
-
-            mean_val_loss = np.mean(val_losses)
-            training_history["val_loss"].append(mean_val_loss)
-            print(f'Epoch {epoch_num} | Val Loss: {mean_val_loss:.5f}')
-            
-            if mean_val_loss < best_val_loss:
-                best_val_loss = mean_val_loss
-                early_stop_counter = 0
-            else:
-                early_stop_counter += 1
-                if early_stop_counter >= parser.patience:
-                    print(f"Early stopping triggered after {epoch_num+1} epochs.")
-                    break
-            """
         # Evaluación en el dataset de validación
         if dataset_val:
             print('Evaluating dataset...')
             if parser.dataset == 'coco':
-                results = coco_eval.evaluate_coco(dataset_val, retinanet)
+                val_metrics = coco_eval.evaluate_coco(dataset_val, retinanet)
+                
+                if isinstance(val_metrics, dict) and "AP" in val_metrics:
+                    avg_precision = val_metrics["AP"]  # Usamos la métrica principal de AP
+                else:
+                    avg_precision = compute_avg_precision(val_metrics)
+            
             elif parser.dataset == 'csv':
-                results = coco_eval.csv_eval.evaluate(dataset_val, retinanet)
+                val_metrics = csv_eval.evaluate(dataset_val, retinanet)
+                avg_precision = compute_avg_precision(val_metrics)
 
-            print("------------------------------------------------------")
-            for threshold, metrics in results.items():
-                tp = metrics['tp']
-                fp = metrics['fp']
-                num_total_gt_bboxes = metrics['num_total_gt_bboxes']
 
-                sensitivity = tp / (tp + (num_total_gt_bboxes - tp)) if (tp + (num_total_gt_bboxes - tp)) > 0 else 0
-                fppi = fp / num_total_gt_bboxes if num_total_gt_bboxes > 0 else 0
-                """
-                print(f"Threshold: {threshold:.2f}")
-                print(f"  Sensitivity: {sensitivity:.4f}")
-                print(f"  TP: {tp}")
-                print(f"  FP: {fp}")
-                print(f"  NUM_TOTAL_BBOXES: {num_total_gt_bboxes}")
-                print(f"  FPPI: {fppi:.4f}")
-                print("------------------------------------------------------")
-                """
-                training_history["sensitivity"].append(sensitivity)
-                training_history["fppi"].append(fppi)
+            val_data_history['tpr'].append(val_metrics['tpr'])
+            val_data_history['fppi'].append(val_metrics['fppi'])
+            # TODO:
+            training_history["val_loss"].append(avg_precision) # cambiar esto porque no es loss, es precission, hacer el plot de avg_precission a parte
+            print(f'Epoch {epoch_num} | Validation AP: {avg_precision:.5f}')
 
+            # *** Early Stopping Logic ***
+            """
+            if avg_precision > best_ap:
+                best_ap = avg_precision
+                epochs_no_improve = 0  # Reset counter
+                torch.save(retinanet.module, 'best_model.pt')  # Guardar mejor modelo
+                print(f'🔹 New best model saved with AP: {best_ap:.5f}')
+            else:
+                epochs_no_improve += 1
+                print(f'No improvement for {epochs_no_improve} epochs')
+
+            if epochs_no_improve >= patience:
+                print(f'Early stopping triggered at epoch {epoch_num}')
+                break  # Sale del loop de entrenamiento
+            """
+            
+        
         scheduler.step(mean_train_loss)
         torch.save(retinanet.module, f'{parser.dataset}_retinanet_{epoch_num}.pt')
 
     retinanet.eval()
     torch.save(retinanet, 'model_final.pt')
+    # print(val_data_history)
 
+    # Graficar la pérdida de entrenamiento y validación
     plot_training_history(training_history)
+    plot_tpr_vs_fppi(val_data_history)
 
+
+def plot_tpr_vs_fppi(val_data_history):
+    plt.figure(figsize=(10, 6))
+
+    tpr_values = val_data_history['tpr']
+    fppi_values = val_data_history['fppi']
+
+    # Graficar tpr vs FPPI
+    plt.plot(fppi_values, tpr_values, linestyle='-', color='b', label='TPR vs FPPI')
+
+    # Configuración del gráfico
+    plt.xlabel('FPPI (False Positives Per Image)')
+    plt.ylabel('TPR (False Positive Rate)')
+    plt.title('TPR vs FPPI a lo largo de las épocas')
+    plt.grid(True)  # Agregar una cuadrícula
+    plt.legend()  # Mostrar leyenda
+
+    # Guardar la figura
+    plt.savefig('tpr_vs_fppi_aaaaaaaaaaaaaaaaaaaaaaaaa.png')
+
+    # Mostrar el gráfico
+    plt.show()
 
 def plot_training_history(training_history):
     plt.figure(figsize=(10, 5))
-
-    # Sensitivity vs FPPI
-    plt.plot(training_history["fppi"], training_history["sensitivity"], label='Sensitivity vs FPPI', marker='o', color='r')
-
-    plt.xlabel('False Positives Per Image (FPPI)')
-    plt.ylabel('Sensitivity')
-    plt.title('Sensitivity vs FPPI')
+    
+    epochs = range(len(training_history["train_loss"]))
+    
+    plt.plot(epochs, training_history["train_loss"], label='Train Loss', marker='o')
+    if len(training_history["val_loss"]) > 0:
+        plt.plot(epochs, training_history["val_loss"], label='Validation Loss', marker='o')
+    
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.title('Training and Validation Loss')
     plt.legend()
     plt.grid()
     
-    plt.savefig('sensitivity_vs_fppi.png')
+    plt.savefig('training_history.png')
     plt.show()
 
-    # Plot de Train Loss y Validation Loss
-    plt.figure(figsize=(10, 5))
-    plt.plot(training_history["train_loss"], label='Train Loss', color='b')
-    plt.plot(training_history["val_loss"], label='Validation Loss', color='g')
+def compute_avg_precision(val_loss):
+    if not val_loss:
+        return np.nan  # Si no hay datos, devolver NaN
+    
+    precisions = []
+    
+    # Verificar si val_loss es un diccionario con las métricas directamente
+    if isinstance(val_loss, dict) and 'tp' in val_loss and 'fp' in val_loss:
+        tp = val_loss['tp']
+        fp = val_loss['fp']
+        
+        if (tp + fp) > 0:
+            precision = tp / (tp + fp)
+            precisions.append(precision)
+    else:
+        # Si val_loss es un diccionario de diccionarios (por ejemplo, métricas por umbral)
+        for metrics in val_loss.values():  # Iteramos sobre los valores del diccionario
+            tp = metrics.get('tp', 0)  # Si no hay "tp", asigna 0
+            fp = metrics.get('fp', 0)  # Si no hay "fp", asigna 0
 
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.title('Train Loss and Validation Loss')
-    plt.legend()
-    plt.grid()
-
-    plt.savefig('train_val_loss.png')
-    plt.show()
+            if (tp + fp) > 0:
+                precision = tp / (tp + fp)
+                precisions.append(precision)
+    
+    return np.mean(precisions) if precisions else np.nan  # Evitar división por 0
 
 if __name__ == '__main__':
     main()
-

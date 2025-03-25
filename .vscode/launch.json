@@ -12,9 +12,9 @@
             "console": "integratedTerminal",
             "args": [
                 "--coco_path",
-                "/home/albert/research/retinanet/pytorch-retinanet/coco",
+                "/home/albert/research/retinanet/pytorch-retinanet_old_version/coco",
                 "--model_path",
-                "/home/albert/research/retinanet/pytorch-retinanet/model_final.pt"
+                "/home/albert/research/retinanet/pytorch-retinanet_old_version/model_final.pt"
             ]
         }
     ]

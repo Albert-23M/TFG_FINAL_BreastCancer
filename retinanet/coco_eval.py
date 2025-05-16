@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import cv2
 import numpy as np
 from pycocotools.cocoeval import COCOeval
+import pickle
 
 def draw_boxes(image, gt_boxes, gt_labels, pred_boxes, pred_labels, scores, ious):
     """
@@ -27,11 +28,17 @@ def draw_boxes(image, gt_boxes, gt_labels, pred_boxes, pred_labels, scores, ious
         image = cv2.rectangle(image, (x, y), (x + w, y + h), (255, 0, 0), 2)  # Azul
         legend.append(f'GT {i+1}: Label={gt_labels[i]}')  # Agregar a la leyenda
 
-    # Dibujar predicciones en verde
+    # Convertir ious (matriz) a una lista plana del máximo IoU por predicción
+    # Transponer para tener listas por predicción, no por ground truth
+    ious_per_pred = [max(col) if len(col) > 0 else 0.0 for col in zip(*ious)]
+
+    # En el bucle:
     for i, box in enumerate(pred_boxes):
         x, y, w, h = map(int, box)
         image = cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Verde
-        legend.append(f'Pred {i+1}: Label={pred_labels[i]}, Score={scores[i]:.2f}, IoU={ious[i]:.2f}')  # Agregar a la leyenda
+        iou_value = ious_per_pred[i] if i < len(ious_per_pred) else 0.0
+        legend.append(f'Pred {i+1}: Label={pred_labels[i]}, Score={scores[i]:.2f}, IoU={iou_value:.2f}')
+
 
     # Dibujar la leyenda en la esquina superior izquierda
     x_offset, y_offset = 10, 20  # Posición inicial de la leyenda
@@ -89,10 +96,10 @@ def non_maximum_suppression(boxes, scores, iou_threshold=0.5):
     boxes = boxes.astype(np.float32)
     
     # Compute (x1, y1, x2, y2) coordinates for easier IoU computation
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 0] + boxes[:, 2]
-    y2 = boxes[:, 1] + boxes[:, 3]
+    # x1 = boxes[:, 0]
+    # y1 = boxes[:, 1]
+    # x2 = boxes[:, 0] + boxes[:, 2]
+    # y2 = boxes[:, 1] + boxes[:, 3]
     
     # Sort the boxes by score (highest first)
     indices = np.argsort(scores)[::-1]
@@ -144,15 +151,32 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
     model.eval()
     with torch.no_grad():
         # thresholds = [round(x, 2) for x in np.arange(0.01, 1.00, 0.1)]
-        thresholds = np.logspace(-3, 0, 50)
-        print(thresholds)
+        # thresholds = np.logspace(-3, 0, 50)
+
+        # thresholds = np.linspace(0.7, 1.0, 50)
+        
+
+        # Thresholds más densos entre 0.90 y 1.00
+        thresholds_high = np.linspace(0.90, 1.00, 100, endpoint=False)
+        # Un poco menos densos en los valores bajos
+        thresholds_mid = np.linspace(0.10, 0.90, 30, endpoint=False)
+        # Opcional: cubrir la parte baja (menos importante aquí)
+        thresholds_low = np.linspace(0.01, 0.10, 10, endpoint=False)
+
+        # Combinar todo
+        thresholds = np.unique(np.concatenate([thresholds_low, thresholds_mid, thresholds_high]))
         results = {threshold: {'tp': 0, 'fp': 0, 'fn': 0, 'tpr': 0, 'fppi': 0, 'num_total_gt_bboxes': 0} for threshold in thresholds}
         
         num_images = len(dataset)
         
-        random_indices = [1,2,3,4,5,6]# random.sample(range(len(dataset)), 6)
+        random_indices = [1,2,3,4,5,6] # random.sample(range(len(dataset)), 6)
         wantToSave = False
         saved_images = 0
+
+        all_scores = []  # Lista para almacenar todos los scores
+
+        all_fppi_values = []
+        all_tpr_values = []
         
         for index in range(len(dataset)):
             data = dataset[index]
@@ -168,6 +192,7 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
             boxes = boxes.cpu().numpy()
             boxes /= scale 
             
+            all_scores.extend(scores) 
             
             if boxes.shape[0] > 0:
                 boxes[:, 2] -= boxes[:, 0]
@@ -181,6 +206,12 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
             gt_labels = data['annot'][:, 4].cpu().numpy()
             num_total_gt_bboxes = len(gt_boxes)
             
+            best_iou_sum = -1
+            best_filtered_boxes = None
+            best_iou_values = None
+            best_labels = None
+            best_scores = None
+
             for threshold in thresholds:
                 tp = 0
                 fp = 0
@@ -221,12 +252,23 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
                         
                 fp = len(iou_values[0]) - len(matched_preds)
                 fn = num_total_gt_bboxes - len(matched_gt_indices)
-                
+
                 # Update results for this threshold
                 results[threshold]['tp'] += tp
                 results[threshold]['fp'] += fp
                 results[threshold]['fn'] += fn
                 results[threshold]['num_total_gt_bboxes'] += num_total_gt_bboxes
+
+                # Update the best filtered boxes based on the sum of IoUs
+                iou_sum = sum(max(iou_values[i]) for i in matched_gt_indices)
+                if iou_sum > best_iou_sum:
+                    best_iou_sum = iou_sum
+                    best_filtered_boxes = filtered_boxes
+                    best_iou_values = iou_values
+                    best_labels = filtered_labels
+                    best_scores = filtered_scores
+
+
             
             if wantToSave and (index in random_indices) and (saved_images < 6):
                 # Visualization part (optional)
@@ -235,10 +277,10 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
                 img = img.astype(np.uint8)
                 
                 # Generar imagen con GT y predicciones juntas
-                comparison_image = draw_boxes(img.copy(), gt_boxes, gt_labels, filtered_boxes * scale, labels, scores, ious)
+                comparison_image = draw_boxes(img.copy(), gt_boxes, gt_labels, best_filtered_boxes * scale, best_labels, best_scores, best_iou_values)
 
                 # Guardar imágenes solo si están en los índices aleatorios y quedan menos de 6 guardadas
-                cv2.imwrite(f'comparison_{index}_withScoresFilter.jpg', comparison_image)
+                cv2.imwrite(f'aaaaaaaaa_image_comparison_{index}_cbis_TL_ToOptimam_ES.jpg', comparison_image)
                 saved_images += 1
             
             print(f'Processing image {index+1}/{num_images}', end='\r')
@@ -254,15 +296,33 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
         
         # FPPI = FP / Número de imágenes
         results[threshold]['fppi'] = fp / num_images if num_images > 0 else 0
+
+        all_fppi_values.append(results[threshold]['fppi'])
+        all_tpr_values.append(results[threshold]['tpr'])
     
     model.train()
     # Print only TPR and FPPI for each threshold
-    for threshold in thresholds:
-        print(f"Threshold: {threshold}, TPR: {results[threshold]['tpr']:.4f}, FPPI: {results[threshold]['fppi']:.4f}")
-    plot_tpr_fppi(results)
-    # print("Results: ", results)
+    # for threshold in thresholds:
+    #     print(f"Threshold: {threshold}, TPR: {results[threshold]['tpr']:.4f}, FPPI: {results[threshold]['fppi']:.4f}")
+
+    # plot_tpr_fppi(results)
+    # plot_score_histogram(all_scores)
+
+    # Corregir los pkl, se ha sobreescrito el results_model_final_SI_augm_flipXY_SI_pretrained_NO_earlyStopping.pkl
+    # Corregir results_model_final_SI_augm_flipXY_SI_pretrained_NO_earlyStopping.pkl y el de ALL_FROZEN_EXCEPT
+    # with open('results_model_final_all_frozen_except_head.pkl', 'wb') as f:
+    #     pickle.dump(results, f)
+
+    print("FPPI values:\n")
+    print(f"fppiValues = {all_fppi_values}")
+    print("TPR valuees:\n")
+    print(f"tprValues = {all_tpr_values}")
+
     return results
 
+# TODO:
+# eL PLOT  de eje y empieza en 0.5 hasta 1.0
+# eL PLOT  de eje x empieza en 0.0 hasta 0.1
 
 def plot_tpr_fppi(results):
     """
@@ -285,6 +345,24 @@ def plot_tpr_fppi(results):
     plt.title("TPR@FPPI Curve")
     plt.legend()
     plt.grid(True)
-    plt.savefig('tpr_vs_fppi.png')
+    plt.savefig('tpr_vs_fppi_CBIS-DDSM_TL_to_OPTIMAM_ES.png')
     # Mostrar la gráfica
-    plt.show()
+    # plt.show()
+    plt.close()
+
+def plot_score_histogram(all_scores):
+    """
+    Plotea y guarda un histograma de los scores de todas las predicciones.
+
+    :param all_scores: Lista con todos los scores de las predicciones.
+    """
+    plt.figure(figsize=(8, 6))
+    plt.hist(all_scores, bins=50, color='blue', alpha=0.7, edgecolor='black')
+
+    plt.xlabel("Score")
+    plt.ylabel("Frequency")
+    plt.title("Distribution of Prediction Scores")
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.savefig("score_histogram_CBIS-DDSM_TL_to_OPTIMAM_ES.png")
+    # plt.show()
+    plt.close()

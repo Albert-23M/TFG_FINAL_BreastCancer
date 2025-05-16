@@ -5,7 +5,7 @@ import torch
 import torch.optim as optim
 from torchvision import transforms
 from retinanet import model
-from retinanet.dataloader import CocoDataset, CSVDataset, collater, Resizer, AspectRatioBasedSampler, Augmenter, Normalizer
+from retinanet.dataloader import AugmenterFlipX, AugmenterCutMix, AugmenterFlipY, CocoDataset, CSVDataset, collater, Resizer, AspectRatioBasedSampler, Normalizer
 from torch.utils.data import DataLoader
 from retinanet import coco_eval, csv_eval
 import matplotlib.pyplot as plt
@@ -29,9 +29,9 @@ def main(args=None):
         if parser.coco_path is None:
             raise ValueError('Must provide --coco_path when training on COCO,')
         
-        dataset_train = CocoDataset(parser.coco_path, set_name='coco_mass_train',
-                                    transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
-        dataset_val = CocoDataset(parser.coco_path, set_name='coco_mass_val',
+        dataset_train = CocoDataset(parser.coco_path, set_name='optimam_coco_mass_train',
+                                    transform=transforms.Compose([Normalizer(), AugmenterFlipX(), Resizer()]))
+        dataset_val = CocoDataset(parser.coco_path, set_name='optimam_coco_mass_val',
                                   transform=transforms.Compose([Normalizer(), Resizer()]))
 
     elif parser.dataset == 'csv':
@@ -39,7 +39,7 @@ def main(args=None):
             raise ValueError('Must provide --csv_train and --csv_classes when training on CSV dataset.')
 
         dataset_train = CSVDataset(train_file=parser.csv_train, class_list=parser.csv_classes,
-                                   transform=transforms.Compose([Normalizer(), Augmenter(), Resizer()]))
+                                   transform=transforms.Compose([Normalizer(), AugmenterFlipX(), Resizer()]))
         dataset_val = CSVDataset(train_file=parser.csv_val, class_list=parser.csv_classes,
                                  transform=transforms.Compose([Normalizer(), Resizer()])) if parser.csv_val else None
     else:
@@ -57,7 +57,15 @@ def main(args=None):
     if parser.depth not in model_dict:
         raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')
     
-    retinanet = model_dict[parser.depth](num_classes=dataset_train.num_classes(), pretrained=True)
+    # Para usar Transfer Learning, sustituimos esta linea por la que hay debajo de esta
+    # retinanet = model_dict[parser.depth](num_classes=dataset_train.num_classes(), pretrained=True)
+    # print(type(retinanet)) # es <class 'retinanet.model.ResNet'>
+
+    retinanet_pretrained = torch.load('/home/albert/research/retinanet/pytorch-retinanet_old_version/model_final_full_mammo_REAL_cbis-ddsm.pt')
+    retinanet = retinanet_pretrained.module # Retiramos el módulo DataParallel
+    
+    # print(type(retinanet_pretrained)) # es <class 'torch.nn.parallel.data_parallel.DataParallel'>
+
 
     if torch.cuda.is_available():
         retinanet = torch.nn.DataParallel(retinanet).cuda()
@@ -70,10 +78,11 @@ def main(args=None):
     epoch_losses = []
 
     
-    thresholds = [round(x, 2) for x in np.arange(0.01, 1.00, 0.1)]
+    thresholds = np.logspace(-3, 0, 50)
     # Diccionarios para guardar el historial
-    training_history = {"train_loss": [], "val_loss": []}
-    val_data_history = {'tp': [], 'fp': [], 'fn': [], 'tpr': [], 'fppi': [], 'num_total_gt_bboxes': []}
+    training_history = {"train_loss": [], "val_loss": [], "avg_precision": []}
+    val_data_history = {threshold: {'tp': [], 'fp': [], 'fn': [], 'tpr': [], 'fppi': [], 'num_total_gt_bboxes': []} for threshold in thresholds}
+
 
 
     best_ap = 0.0  # Mejor AP encontrada
@@ -82,6 +91,26 @@ def main(args=None):
 
     print(f"Lengt of dataset_train: {len(dataset_train)}")
     print(f"Lengt of dataset_val: {len(dataset_val)}")
+
+    # batch = next(iter(dataloader_train))
+
+    # # Plot all images in the batch
+    # imgs = batch["img"]
+    # batch_size = imgs.shape[0]
+    # fig, axes = plt.subplots(2, 4, figsize=(16, 8))  # 2 rows, 4 columns
+
+    # for i in range(batch_size):
+    #     img = imgs[i].permute(1, 2, 0).cpu().numpy()  # Convert from (C, H, W) to (H, W, C)
+    #     img = (img - img.min()) / (img.max() - img.min())  # Normalize to [0, 1]
+    #     row, col = divmod(i, 4)
+    #     axes[row, col].imshow(img)
+    #     axes[row, col].axis('off')
+    #     axes[row, col].set_title(f"Image {i+1}")
+
+    # plt.tight_layout()
+    # plt.savefig('batch_images_optimam.png')
+    # # plt.show()
+    # return
 
 
     for epoch_num in range(parser.epochs):
@@ -130,19 +159,23 @@ def main(args=None):
                 val_metrics = csv_eval.evaluate(dataset_val, retinanet)
                 avg_precision = compute_avg_precision(val_metrics)
 
+            for threshold in thresholds:
+                val_data_history[threshold]['tp'].append(val_metrics[threshold]['tp'])
+                val_data_history[threshold]['fp'].append(val_metrics[threshold]['fp'])
+                val_data_history[threshold]['fn'].append(val_metrics[threshold]['fn'])
+                val_data_history[threshold]['tpr'].append(val_metrics[threshold]['tpr'])
+                val_data_history[threshold]['fppi'].append(val_metrics[threshold]['fppi'])
+                val_data_history[threshold]['num_total_gt_bboxes'].append(val_metrics[threshold]['num_total_gt_bboxes'])
 
-            val_data_history['tpr'].append(val_metrics['tpr'])
-            val_data_history['fppi'].append(val_metrics['fppi'])
-            # TODO:
-            training_history["val_loss"].append(avg_precision) # cambiar esto porque no es loss, es precission, hacer el plot de avg_precission a parte
+            training_history["avg_precision"].append(avg_precision)
             print(f'Epoch {epoch_num} | Validation AP: {avg_precision:.5f}')
 
+
             # *** Early Stopping Logic ***
-            """
             if avg_precision > best_ap:
                 best_ap = avg_precision
                 epochs_no_improve = 0  # Reset counter
-                torch.save(retinanet.module, 'best_model.pt')  # Guardar mejor modelo
+                torch.save(retinanet.module, 'best_model_ddsm_TL_to_optimam_ES.pt')  # Guardar mejor modelo
                 print(f'🔹 New best model saved with AP: {best_ap:.5f}')
             else:
                 epochs_no_improve += 1
@@ -151,42 +184,35 @@ def main(args=None):
             if epochs_no_improve >= patience:
                 print(f'Early stopping triggered at epoch {epoch_num}')
                 break  # Sale del loop de entrenamiento
-            """
             
-        
         scheduler.step(mean_train_loss)
         torch.save(retinanet.module, f'{parser.dataset}_retinanet_{epoch_num}.pt')
 
     retinanet.eval()
-    torch.save(retinanet, 'model_final.pt')
+    torch.save(retinanet, 'model_final_cbis-ddsm_TL_to_optimam_ES.pt')
     # print(val_data_history)
 
     # Graficar la pérdida de entrenamiento y validación
     plot_training_history(training_history)
-    plot_tpr_vs_fppi(val_data_history)
+    plot_avg_precision(training_history)
 
 
-def plot_tpr_vs_fppi(val_data_history):
-    plt.figure(figsize=(10, 6))
-
-    tpr_values = val_data_history['tpr']
-    fppi_values = val_data_history['fppi']
-
-    # Graficar tpr vs FPPI
-    plt.plot(fppi_values, tpr_values, linestyle='-', color='b', label='TPR vs FPPI')
-
-    # Configuración del gráfico
-    plt.xlabel('FPPI (False Positives Per Image)')
-    plt.ylabel('TPR (False Positive Rate)')
-    plt.title('TPR vs FPPI a lo largo de las épocas')
-    plt.grid(True)  # Agregar una cuadrícula
-    plt.legend()  # Mostrar leyenda
-
-    # Guardar la figura
-    plt.savefig('tpr_vs_fppi_aaaaaaaaaaaaaaaaaaaaaaaaa.png')
-
-    # Mostrar el gráfico
-    plt.show()
+def plot_avg_precision(training_history):
+    plt.figure(figsize=(10, 5))
+    
+    epochs = range(len(training_history["avg_precision"]))
+    
+    plt.plot(epochs, training_history["avg_precision"], label='Average Precision', marker='o', color='green')
+    
+    plt.xlabel('Epochs')
+    plt.ylabel('Average Precision')
+    plt.title('Average Precision Over Epochs')
+    plt.legend()
+    plt.grid()
+    
+    plt.savefig('avg_precision_history_ddsm_TL_to_optimam_ES.png')
+    # plt.show()
+    plt.close()
 
 def plot_training_history(training_history):
     plt.figure(figsize=(10, 5))
@@ -203,34 +229,26 @@ def plot_training_history(training_history):
     plt.legend()
     plt.grid()
     
-    plt.savefig('training_history.png')
-    plt.show()
+    plt.savefig('training_history_ddsm_TL_to_optimam_ES.png')
+    # plt.show()
+    plt.close()
 
 def compute_avg_precision(val_loss):
     if not val_loss:
-        return np.nan  # Si no hay datos, devolver NaN
+        return np.nan  # Si no hay datos, evitar errores
     
     precisions = []
     
-    # Verificar si val_loss es un diccionario con las métricas directamente
-    if isinstance(val_loss, dict) and 'tp' in val_loss and 'fp' in val_loss:
-        tp = val_loss['tp']
-        fp = val_loss['fp']
-        
+    for threshold, metrics in val_loss.items():  # Iteramos sobre los valores del diccionario
+        tp = metrics.get("tp", 0)  # Si no hay "tp", asigna 0
+        fp = metrics.get("fp", 0)  # Si no hay "fp", asigna 0
+
         if (tp + fp) > 0:
             precision = tp / (tp + fp)
             precisions.append(precision)
-    else:
-        # Si val_loss es un diccionario de diccionarios (por ejemplo, métricas por umbral)
-        for metrics in val_loss.values():  # Iteramos sobre los valores del diccionario
-            tp = metrics.get('tp', 0)  # Si no hay "tp", asigna 0
-            fp = metrics.get('fp', 0)  # Si no hay "fp", asigna 0
-
-            if (tp + fp) > 0:
-                precision = tp / (tp + fp)
-                precisions.append(precision)
     
     return np.mean(precisions) if precisions else np.nan  # Evitar división por 0
 
 if __name__ == '__main__':
     main()
+

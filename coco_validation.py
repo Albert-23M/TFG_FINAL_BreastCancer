@@ -18,15 +18,10 @@ def main(args=None):
 
     print(f'Loading COCO dataset from: {parser.coco_path}')
     
-    dataset_val = CocoDataset(parser.coco_path, set_name='coco_mass_test',
+    dataset_val = CocoDataset(parser.coco_path, set_name='optimam_coco_mass_test',
                               transform=transforms.Compose([Normalizer(), Resizer()]))
-
-    print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-    print(f"Lengt of dataset: {len(dataset_val)}")
-
-    print("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-
-
+    
+    print(f'Number of images in validation set: {len(dataset_val)}')
     # Cargar modelo
     if torch.cuda.is_available():
         retinanet = torch.load(parser.model_path)

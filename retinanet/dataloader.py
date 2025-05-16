@@ -1,6 +1,7 @@
 from __future__ import print_function, division
 import sys
 import os
+import cv2
 import torch
 import numpy as np
 import random
@@ -23,7 +24,7 @@ from PIL import Image
 class CocoDataset(Dataset):
     """Coco dataset."""
 
-    def __init__(self, root_dir, set_name='coco_mass_train', transform=None):
+    def __init__(self, root_dir, set_name='optimam_coco_mass_train', transform=None):
         """
         Args:
             root_dir (string): COCO directory.
@@ -372,7 +373,7 @@ class Resizer(object):
         return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale}
 
 
-class Augmenter(object):
+class AugmenterFlipX(object):
     """Convert ndarrays in sample to Tensors."""
 
     def __call__(self, sample, flip_x=0.5):
@@ -395,6 +396,103 @@ class Augmenter(object):
 
         return sample
 
+
+class AugmenterFlipY(object):
+    """Flip vertical (eje Y) la imagen y las anotaciones (bounding boxes)."""
+
+    def __call__(self, sample, flip_y=0.5):
+
+        if np.random.rand() < flip_y:
+            image, annots = sample['img'], sample['annot']
+            image = image[::-1, :, :]  # Flip vertical (sobre eje Y)
+
+            rows, cols, channels = image.shape
+
+            y1 = annots[:, 1].copy()
+            y2 = annots[:, 3].copy()
+
+            y_tmp = y1.copy()
+
+            annots[:, 1] = rows - y2
+            annots[:, 3] = rows - y_tmp
+
+            sample = {'img': image, 'annot': annots}
+
+        return sample
+
+
+class AugmenterCutMix(object):
+    def __init__(self, dataset, beta=1.0, prob=0.5):
+        """
+        - dataset: referencia al mismo dataset para elegir una imagen aleatoria.
+        - beta: parámetro del Beta distribution para decidir el tamaño del parche.
+        - prob: probabilidad de aplicar CutMix.
+        """
+        self.dataset = dataset
+        self.beta = beta
+        self.prob = prob
+
+    def __call__(self, sample):
+        if np.random.rand() > self.prob:
+            return sample  # No aplica CutMix
+
+        image1, annots1 = sample['img'], sample['annot']
+        h, w, _ = image1.shape
+
+        # Elegir otra imagen aleatoria del dataset
+        index2 = random.randint(0, len(self.dataset) - 1)
+        sample2 = self.dataset[index2]
+        image2, annots2 = sample2['img'], sample2['annot']
+
+        # Calcular la región CutMix (Beta distribuida)
+        lam = np.random.beta(self.beta, self.beta)
+        cut_w = int(w * np.sqrt(1 - lam))
+        cut_h = int(h * np.sqrt(1 - lam))
+
+        # Coordenadas del centro del parche
+        cx = np.random.randint(0, w)
+        cy = np.random.randint(0, h)
+
+        x1 = np.clip(cx - cut_w // 2, 0, w)
+        y1 = np.clip(cy - cut_h // 2, 0, h)
+        x2 = np.clip(cx + cut_w // 2, 0, w)
+        y2 = np.clip(cy + cut_h // 2, 0, h)
+
+        # Reescalar la segunda imagen si no tiene mismo tamaño
+        if image2.shape != image1.shape:
+            image2 = cv2.resize(image2, (w, h))
+            scale_y = h / image2.shape[0]
+            scale_x = w / image2.shape[1]
+            annots2[:, [0, 2]] *= scale_x
+            annots2[:, [1, 3]] *= scale_y
+
+        # Pegar parche de image2 sobre image1
+        image1[y1:y2, x1:x2] = image2[y1:y2, x1:x2]
+
+        # Filtrar los bounding boxes de image2 que caen dentro del parche
+        new_annots2 = []
+        for bbox in annots2:
+            bx1, by1, bx2, by2 = bbox[:4]
+            if bx2 <= x1 or bx1 >= x2 or by2 <= y1 or by1 >= y2:
+                continue  # completamente afuera
+            # recortar bbox para que quede dentro del parche
+            clipped_box = [
+                max(bx1, x1),
+                max(by1, y1),
+                min(bx2, x2),
+                min(by2, y2),
+                bbox[4]  # label
+            ]
+            new_annots2.append(clipped_box)
+
+        # Combinar anotaciones
+        if len(new_annots2) > 0:
+            new_annots2 = np.array(new_annots2)
+            annots = np.vstack((annots1, new_annots2))
+        else:
+            annots = annots1
+
+        return {'img': image1, 'annot': annots}
 
 class Normalizer(object):
 

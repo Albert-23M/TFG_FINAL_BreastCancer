@@ -99,8 +99,6 @@ def non_maximum_suppression(boxes, scores, iou_threshold=0.5):
     # Sort the boxes by score (highest first)
     indices = np.argsort(scores)[::-1]
     keep = []
-    # TODO:
-    # debugar esta funcion
 
     while indices.size > 0:
         current = indices[0]
@@ -248,9 +246,6 @@ def evaluate_coco(dataset, model, iou_threshold=0.5, nms_iou_threshold=0.75):
     fp = results['fp']
     fn = results['fn']
     num_total_gt_bboxes = results['num_total_gt_bboxes']
-    # TODO:
-    # HACERLO CON TPR@FPPI
-    # TPR = TP / (TP + FN)
 
     results['tpr'] = tp / (tp + fn) if (tp + fn)  > 0 else 0
     

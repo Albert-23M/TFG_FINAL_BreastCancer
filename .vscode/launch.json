@@ -8,14 +8,23 @@
             "name": "Python Debugger: Current File with Arguments",
             "type": "debugpy",
             "request": "launch",
-            "program": "coco_validation.py",
+            "program": "train.py",
+            // "program": "coco_validation.py",
             "console": "integratedTerminal",
             "args": [
+                "--dataset",
+                "coco",
                 "--coco_path",
                 "/home/albert/research/retinanet/pytorch-retinanet_old_version/coco",
-                "--model_path",
-                "/home/albert/research/retinanet/pytorch-retinanet_old_version/model_final.pt"
+                "--depth",
+                "50"
             ]
+            // "args": [
+            //     "--coco_path",
+            //     "/home/albert/research/retinanet/pytorch-retinanet_old_version/coco",
+            //     "--model_path",
+            //     "/home/albert/research/retinanet/pytorch-retinanet_old_version/model_final_v_overfitting.pt"
+            // ]
         }
     ]
 }

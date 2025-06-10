@@ -12,7 +12,7 @@ Una vez activado, para comenzar el entrenamiento se debe ejecutar el siguiente c
 El valor numDepth debe ser uno de los siguientes: 18, 34, 50, 101, 152.
 
 También se pueden especificar otros parámetros, como por ejemplo el número de épocas (--epochs), el tamaño del batch (--batch_size), entre otros.
-Comandos e instrucciones para validación
+## Comandos e instrucciones para validación
 
 -------------------------------------
 Al igual que para el entrenamiento, primero hay que activar el entorno virtual.

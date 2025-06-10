@@ -8,23 +8,25 @@
             "name": "Python Debugger: Current File with Arguments",
             "type": "debugpy",
             "request": "launch",
-            "program": "train.py",
-            // "program": "coco_validation.py",
+            // "program": "train.py",
+            "program": "coco_validation.py",
             "console": "integratedTerminal",
-            "args": [
-                "--dataset",
-                "coco",
-                "--coco_path",
-                "/home/albert/research/retinanet/pytorch-retinanet_old_version/coco",
-                "--depth",
-                "50"
-            ]
             // "args": [
+            //     "--dataset",
+            //     "coco",
             //     "--coco_path",
             //     "/home/albert/research/retinanet/pytorch-retinanet_old_version/coco",
-            //     "--model_path",
-            //     "/home/albert/research/retinanet/pytorch-retinanet_old_version/model_final_v_overfitting.pt"
+            //     "--depth",
+            //     "50"
             // ]
+            "args": [
+                "--coco_path",
+                "/home/albert/research/retinanet/pytorch-retinanet_old_version/coco",
+                "--model_path",
+                // "/home/albert/research/retinanet/pytorch-retinanet_old_version/model_final_v_overfitting.pt"
+                // "/home/albert/research/retinanet/pytorch-retinanet_old_version/best_model_ddsm_TL_to_optimam_ES_v1.pt"
+                "/home/albert/research/retinanet/pytorch-retinanet_old_version/best_model_ddsm_SISI_TL_to_optimam_ES.pt"
+            ]
         }
     ]
 }

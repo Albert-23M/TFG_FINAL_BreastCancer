@@ -59,13 +59,11 @@ def main(args=None):
     
     # Para usar Transfer Learning, sustituimos esta linea por la que hay debajo de esta
     # retinanet = model_dict[parser.depth](num_classes=dataset_train.num_classes(), pretrained=True)
-    # print(type(retinanet)) # es <class 'retinanet.model.ResNet'>
 
-    retinanet_pretrained = torch.load('/home/albert/research/retinanet/pytorch-retinanet_old_version/model_final_full_mammo_REAL_cbis-ddsm.pt')
-    retinanet = retinanet_pretrained.module # Retiramos el módulo DataParallel
+    retinanet_pretrained = torch.load('/home/albert/research/retinanet/pytorch-retinanet_old_version/model_final_SI_augm_SI_pretrained.pt')
+    retinanet = retinanet_pretrained.module
     
-    # print(type(retinanet_pretrained)) # es <class 'torch.nn.parallel.data_parallel.DataParallel'>
-
+    print(f'Total trainable parameters: {sum(p.numel() for p in retinanet.parameters() if p.requires_grad):,}')
 
     if torch.cuda.is_available():
         retinanet = torch.nn.DataParallel(retinanet).cuda()
@@ -76,9 +74,8 @@ def main(args=None):
 
     loss_hist = collections.deque(maxlen=500)
     epoch_losses = []
-
     
-    thresholds = np.logspace(-3, 0, 50)
+    thresholds = np.linspace(0,1,500)       
     # Diccionarios para guardar el historial
     training_history = {"train_loss": [], "val_loss": [], "avg_precision": []}
     val_data_history = {threshold: {'tp': [], 'fp': [], 'fn': [], 'tpr': [], 'fppi': [], 'num_total_gt_bboxes': []} for threshold in thresholds}
@@ -91,26 +88,6 @@ def main(args=None):
 
     print(f"Lengt of dataset_train: {len(dataset_train)}")
     print(f"Lengt of dataset_val: {len(dataset_val)}")
-
-    # batch = next(iter(dataloader_train))
-
-    # # Plot all images in the batch
-    # imgs = batch["img"]
-    # batch_size = imgs.shape[0]
-    # fig, axes = plt.subplots(2, 4, figsize=(16, 8))  # 2 rows, 4 columns
-
-    # for i in range(batch_size):
-    #     img = imgs[i].permute(1, 2, 0).cpu().numpy()  # Convert from (C, H, W) to (H, W, C)
-    #     img = (img - img.min()) / (img.max() - img.min())  # Normalize to [0, 1]
-    #     row, col = divmod(i, 4)
-    #     axes[row, col].imshow(img)
-    #     axes[row, col].axis('off')
-    #     axes[row, col].set_title(f"Image {i+1}")
-
-    # plt.tight_layout()
-    # plt.savefig('batch_images_optimam.png')
-    # # plt.show()
-    # return
 
 
     for epoch_num in range(parser.epochs):
@@ -175,7 +152,7 @@ def main(args=None):
             if avg_precision > best_ap:
                 best_ap = avg_precision
                 epochs_no_improve = 0  # Reset counter
-                torch.save(retinanet.module, 'best_model_ddsm_TL_to_optimam_ES.pt')  # Guardar mejor modelo
+                torch.save(retinanet.module, 'best_model_ddsm_SISI_TL_to_optimam_ES.pt')  # Guardar mejor modelo
                 print(f'🔹 New best model saved with AP: {best_ap:.5f}')
             else:
                 epochs_no_improve += 1
@@ -183,16 +160,15 @@ def main(args=None):
 
             if epochs_no_improve >= patience:
                 print(f'Early stopping triggered at epoch {epoch_num}')
-                break  # Sale del loop de entrenamiento
+                break  # Salimos del loop de entrenamiento
             
         scheduler.step(mean_train_loss)
         torch.save(retinanet.module, f'{parser.dataset}_retinanet_{epoch_num}.pt')
 
     retinanet.eval()
-    torch.save(retinanet, 'model_final_cbis-ddsm_TL_to_optimam_ES.pt')
-    # print(val_data_history)
+    torch.save(retinanet, 'model_final_cbis-ddsm_SISI_TL_to_optimam_ES.pt')
 
-    # Graficar la pérdida de entrenamiento y validación
+    # Graficamos train_loss y val_loss
     plot_training_history(training_history)
     plot_avg_precision(training_history)
 
@@ -210,8 +186,7 @@ def plot_avg_precision(training_history):
     plt.legend()
     plt.grid()
     
-    plt.savefig('avg_precision_history_ddsm_TL_to_optimam_ES.png')
-    # plt.show()
+    plt.savefig('avg_precision_history_ddsm_SISI_TL_to_optimam_ES.png')
     plt.close()
 
 def plot_training_history(training_history):
@@ -229,8 +204,7 @@ def plot_training_history(training_history):
     plt.legend()
     plt.grid()
     
-    plt.savefig('training_history_ddsm_TL_to_optimam_ES.png')
-    # plt.show()
+    plt.savefig('training_history_ddsm_SISI_TL_to_optimam_ES.png')
     plt.close()
 
 def compute_avg_precision(val_loss):

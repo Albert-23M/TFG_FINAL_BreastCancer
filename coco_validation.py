@@ -36,7 +36,6 @@ def main(args=None):
     retinanet.training = False
     retinanet.eval()
 
-    # Método alternativo para congelar BatchNorm si es necesario
     def freeze_bn(module):
         if isinstance(module, torch.nn.BatchNorm2d):
             module.eval()

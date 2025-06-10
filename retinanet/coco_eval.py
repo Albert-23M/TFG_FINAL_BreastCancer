@@ -1,3 +1,4 @@
+import csv
 import torch
 import json
 import random
@@ -6,6 +7,7 @@ import cv2
 import numpy as np
 from pycocotools.cocoeval import COCOeval
 import pickle
+from sklearn.metrics import auc
 
 def draw_boxes(image, gt_boxes, gt_labels, pred_boxes, pred_labels, scores, ious):
     """
@@ -22,28 +24,26 @@ def draw_boxes(image, gt_boxes, gt_labels, pred_boxes, pred_labels, scores, ious
     
     legend = []  # Lista para almacenar las leyendas
 
-    # Dibujar ground truth en azul
+    # Dibujamos ground truth en azul
     for i, box in enumerate(gt_boxes):
         x, y, w, h = map(int, box)
-        image = cv2.rectangle(image, (x, y), (x + w, y + h), (255, 0, 0), 2)  # Azul
-        legend.append(f'GT {i+1}: Label={gt_labels[i]}')  # Agregar a la leyenda
+        image = cv2.rectangle(image, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        legend.append(f'GT {i+1}')  # Agregar a la leyenda
 
-    # Convertir ious (matriz) a una lista plana del máximo IoU por predicción
-    # Transponer para tener listas por predicción, no por ground truth
+    # Convertimod ious (matriz) a una lista plana del max IoU por predicción
     ious_per_pred = [max(col) if len(col) > 0 else 0.0 for col in zip(*ious)]
 
-    # En el bucle:
     for i, box in enumerate(pred_boxes):
         x, y, w, h = map(int, box)
         image = cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Verde
         iou_value = ious_per_pred[i] if i < len(ious_per_pred) else 0.0
-        legend.append(f'Pred {i+1}: Label={pred_labels[i]}, Score={scores[i]:.2f}, IoU={iou_value:.2f}')
+        legend.append(f'Pred {i+1}: IoU={iou_value:.2f}')
 
 
     # Dibujar la leyenda en la esquina superior izquierda
     x_offset, y_offset = 10, 20  # Posición inicial de la leyenda
     for i, text in enumerate(legend):
-        y_position = y_offset + i * 20  # Espaciado entre líneas
+        y_position = y_offset + i * 20
         cv2.putText(image, text, (x_offset, y_position), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
     return image
@@ -95,12 +95,6 @@ def non_maximum_suppression(boxes, scores, iou_threshold=0.5):
     # Convert to float if necessary
     boxes = boxes.astype(np.float32)
     
-    # Compute (x1, y1, x2, y2) coordinates for easier IoU computation
-    # x1 = boxes[:, 0]
-    # y1 = boxes[:, 1]
-    # x2 = boxes[:, 0] + boxes[:, 2]
-    # y2 = boxes[:, 1] + boxes[:, 3]
-    
     # Sort the boxes by score (highest first)
     indices = np.argsort(scores)[::-1]
     keep = []
@@ -134,7 +128,7 @@ def non_maximum_suppression(boxes, scores, iou_threshold=0.5):
     
     return keep
 
-def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
+def evaluate_coco(dataset, model, iou_threshold=0.1, nms_iou_threshold=0.5):
     """
     Evaluate the COCO validation dataset with the given model.
     Now integrated with non maximum suppression (NMS).
@@ -148,35 +142,26 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
     Returns:
         results (dict): A dictionary with the results for each score threshold.
     """
+    zero_pred_count = 0
+    num_images = len(dataset)
     model.eval()
     with torch.no_grad():
-        # thresholds = [round(x, 2) for x in np.arange(0.01, 1.00, 0.1)]
-        # thresholds = np.logspace(-3, 0, 50)
-
-        # thresholds = np.linspace(0.7, 1.0, 50)
-        
-
-        # Thresholds más densos entre 0.90 y 1.00
-        thresholds_high = np.linspace(0.90, 1.00, 100, endpoint=False)
-        # Un poco menos densos en los valores bajos
-        thresholds_mid = np.linspace(0.10, 0.90, 30, endpoint=False)
-        # Opcional: cubrir la parte baja (menos importante aquí)
-        thresholds_low = np.linspace(0.01, 0.10, 10, endpoint=False)
-
-        # Combinar todo
-        thresholds = np.unique(np.concatenate([thresholds_low, thresholds_mid, thresholds_high]))
+        thresholds = np.linspace(0,1,500)
         results = {threshold: {'tp': 0, 'fp': 0, 'fn': 0, 'tpr': 0, 'fppi': 0, 'num_total_gt_bboxes': 0} for threshold in thresholds}
         
-        num_images = len(dataset)
-        
-        random_indices = [1,2,3,4,5,6] # random.sample(range(len(dataset)), 6)
+        # Para guardar imágenes de ejemplo
+        random_indices = [0,1,2,3,4,5] # random.sample(range(len(dataset)), 6)
         wantToSave = False
-        saved_images = 0
 
+        saved_images = 0
+        
         all_scores = []  # Lista para almacenar todos los scores
 
         all_fppi_values = []
         all_tpr_values = []
+
+        correct_gt_boxes = set()
+        incorrect_gt_boxes = set()
         
         for index in range(len(dataset)):
             data = dataset[index]
@@ -193,6 +178,8 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
             boxes /= scale 
             
             all_scores.extend(scores) 
+            if scores.shape[0] == 0:
+                zero_pred_count += 1
             
             if boxes.shape[0] > 0:
                 boxes[:, 2] -= boxes[:, 0]
@@ -217,28 +204,27 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
                 fp = 0
                 fn = 0
                 
-                # Filter out predictions below the current score threshold
-                
-                valid_indices = scores >= threshold
+                clipped_scores = np.clip(scores, 0.0, 1.0)
+
+                # Se filtran las predicciones por el umbral actual
+                valid_indices = clipped_scores > threshold
                 filtered_boxes = boxes[valid_indices]
                 filtered_labels = labels[valid_indices]
-                filtered_scores = scores[valid_indices]
+                filtered_scores = clipped_scores[valid_indices]
                 
-                
-                # --- APPLY NON MAXIMUM SUPPRESSION ---
+                # Se aplica non_maximum suppression (NMS) a las predicciones filtradas
                 keep_indices = non_maximum_suppression(filtered_boxes, filtered_scores, iou_threshold=nms_iou_threshold)
-                # antes era asi: filtered_boxes = filtered_boxes[keep_indices]
+                
                 filtered_boxes = filtered_boxes[keep_indices]
                 filtered_labels = filtered_labels[keep_indices]
                 filtered_scores = filtered_scores[keep_indices]
-                # ------------------------------------
                 
-                # Multiply boxes back by scale to bring them to original image coordinates
-                # (this is necessary if your ground truths are in original coordinates)
+                # Multiplicamos por scale para que las boxes estén en la escala original
                 iou_values = calculate_iou(gt_boxes, filtered_boxes * scale)
                 matched_gt_indices = set()
                 matched_preds = set()
-                # For each ground truth box, check if there is any prediction with IoU >= iou_threshold
+
+                # Para cada ground_truth box, miramos si hay alguna predicción que tenga un IoU >= iou_threshold
                 for i, ious in enumerate(iou_values):
                     max_iou, max_iou_ind = 0, -1
                     for j, iou in enumerate(ious):
@@ -250,16 +236,15 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
                         matched_gt_indices.add(i)
                         matched_preds.add(max_iou_ind)
                         
+
                 fp = len(iou_values[0]) - len(matched_preds)
                 fn = num_total_gt_bboxes - len(matched_gt_indices)
 
-                # Update results for this threshold
                 results[threshold]['tp'] += tp
                 results[threshold]['fp'] += fp
                 results[threshold]['fn'] += fn
                 results[threshold]['num_total_gt_bboxes'] += num_total_gt_bboxes
 
-                # Update the best filtered boxes based on the sum of IoUs
                 iou_sum = sum(max(iou_values[i]) for i in matched_gt_indices)
                 if iou_sum > best_iou_sum:
                     best_iou_sum = iou_sum
@@ -268,10 +253,29 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
                     best_labels = filtered_labels
                     best_scores = filtered_scores
 
+            # Calculamos el iou de los gt y pred finales:
+            if best_filtered_boxes is not None and len(best_filtered_boxes) > 0:
+                iou_values = calculate_iou(gt_boxes, best_filtered_boxes * scale)
+            else:
+                iou_values = []
 
+            # Quiero saber si para cada gt_boxes existe al menos un best_filtered_boxes con iou >= iou_threshold
+            matched_gt_indices = set()
+            for i, ious in enumerate(iou_values):
+                for j, iou in enumerate(ious):
+                    if iou >= iou_threshold:
+                        matched_gt_indices.add(i)
+                        break
             
+            # Actualizar los sets de correctos e incorrectos
+            for i in range(len(gt_boxes)):
+                if i in matched_gt_indices:
+                    correct_gt_boxes.add(tuple(gt_boxes[i]))
+                else:
+                    incorrect_gt_boxes.add(tuple(gt_boxes[i]))
+
             if wantToSave and (index in random_indices) and (saved_images < 6):
-                # Visualization part (optional)
+                # Codigo opcional para guardar imágenes de ejemplo
                 img = data['img'].numpy()
                 img = (img - img.min()) * (255 / (img.max() - img.min()))
                 img = img.astype(np.uint8)
@@ -280,75 +284,71 @@ def evaluate_coco(dataset, model, iou_threshold=0.75, nms_iou_threshold=0.5):
                 comparison_image = draw_boxes(img.copy(), gt_boxes, gt_labels, best_filtered_boxes * scale, best_labels, best_scores, best_iou_values)
 
                 # Guardar imágenes solo si están en los índices aleatorios y quedan menos de 6 guardadas
-                cv2.imwrite(f'aaaaaaaaa_image_comparison_{index}_cbis_TL_ToOptimam_ES.jpg', comparison_image)
+                cv2.imwrite(f'image_comparison_{index}_cbis-ddsm_SISI_TL_To_Optimam.jpg', comparison_image)
                 saved_images += 1
             
             print(f'Processing image {index+1}/{num_images}', end='\r')
     
-    # Calcular tpr y FPPI al final para cada umbral
+    # Calcular tpr y FPPI al final para cada threshold
     for threshold in thresholds:
         tp = results[threshold]['tp']
         fp = results[threshold]['fp']
+        fn = results[threshold]['fn']
         num_total_gt_bboxes = results[threshold]['num_total_gt_bboxes']
         
-        # tpr = FP / (FP + num_total_gt_boxes (1))
-        results[threshold]['tpr'] = fp / (fp + num_total_gt_bboxes) if (fp + num_total_gt_bboxes) > 0 else 0
-        
-        # FPPI = FP / Número de imágenes
+        results[threshold]['tpr'] = tp / (tp + fn) if (tp + fn) > 0 else 0
         results[threshold]['fppi'] = fp / num_images if num_images > 0 else 0
 
         all_fppi_values.append(results[threshold]['fppi'])
         all_tpr_values.append(results[threshold]['tpr'])
-    
+  
+
+    fppi = np.array(all_fppi_values)
+    tpr = np.array(all_tpr_values)
+
+    # Ordenamos por FPPI
+    sorted_indices = np.argsort(fppi)
+    fppi = fppi[sorted_indices]
+    tpr = tpr[sorted_indices]
+
+    # Guardamos los resultados en un archivo CSV para posteriormente graficar
+    save_bboxes_to_csv(correct_gt_boxes, 'gt_pred_correct.csv', scale)
+    save_bboxes_to_csv(incorrect_gt_boxes, 'gt_pred_incorrect.csv', scale)
+
     model.train()
-    # Print only TPR and FPPI for each threshold
-    # for threshold in thresholds:
-    #     print(f"Threshold: {threshold}, TPR: {results[threshold]['tpr']:.4f}, FPPI: {results[threshold]['fppi']:.4f}")
-
-    # plot_tpr_fppi(results)
-    # plot_score_histogram(all_scores)
-
-    # Corregir los pkl, se ha sobreescrito el results_model_final_SI_augm_flipXY_SI_pretrained_NO_earlyStopping.pkl
-    # Corregir results_model_final_SI_augm_flipXY_SI_pretrained_NO_earlyStopping.pkl y el de ALL_FROZEN_EXCEPT
-    # with open('results_model_final_all_frozen_except_head.pkl', 'wb') as f:
-    #     pickle.dump(results, f)
-
-    print("FPPI values:\n")
-    print(f"fppiValues = {all_fppi_values}")
-    print("TPR valuees:\n")
-    print(f"tprValues = {all_tpr_values}")
-
+    
     return results
 
-# TODO:
-# eL PLOT  de eje y empieza en 0.5 hasta 1.0
-# eL PLOT  de eje x empieza en 0.0 hasta 0.1
+def save_bboxes_to_csv(bboxes, csv_filename, scale=1.0):
+    with open(csv_filename, mode='w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['x1', 'y1', 'x2', 'y2', 'width', 'height', 'scale'])
+
+        for x1, y1, w, h in bboxes:
+            x2 = x1 + w
+            y2 = y1 + h
+            writer.writerow([x1, y1, x2, y2, w, h, scale])
+
 
 def plot_tpr_fppi(results):
-    """
-    Plotea la curva TPR@FPPI basada en los resultados de evaluación.
-
-    :param results: Diccionario con los umbrales como claves y valores que contienen 'tp', 'fn', y 'fppi'.
-    """
-    # Extraer valores de threshold, TPR y FPPI de los resultados
-    thresholds = sorted(results.keys())  # Ordenar los umbrales
+    thresholds = sorted(results.keys())
     tpr_values = [results[t]['tpr'] for t in thresholds]
     fppi_values = [results[t]['fppi'] for t in thresholds]
 
-    # Crear la gráfica
     plt.figure(figsize=(8, 6))
-    plt.plot(fppi_values, tpr_values, marker='o', linestyle='-', color='b', label="TPR@FPPI")
+    plt.plot(fppi_values, tpr_values, linestyle='-', color='b', label="TPR@FPPI")
 
-    # Etiquetas y título
     plt.xlabel("False Positives Per Image (FPPI)")
     plt.ylabel("True Positive Rate (TPR)")
-    plt.title("TPR@FPPI Curve")
-    plt.legend()
+    plt.title("TPR vs FPPI Curve")
+    # plt.ylim(0.5, 1.0)
+    #plt.xlim(0.0, 0.1)
     plt.grid(True)
-    plt.savefig('tpr_vs_fppi_CBIS-DDSM_TL_to_OPTIMAM_ES.png')
-    # Mostrar la gráfica
-    # plt.show()
+    plt.legend()
+    plt.savefig('tpr_vs_fppi_optimam_to_cbis-ddsm_plot_fix_clipped_scores.png')
     plt.close()
+
+
 
 def plot_score_histogram(all_scores):
     """
@@ -363,6 +363,6 @@ def plot_score_histogram(all_scores):
     plt.ylabel("Frequency")
     plt.title("Distribution of Prediction Scores")
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.savefig("score_histogram_CBIS-DDSM_TL_to_OPTIMAM_ES.png")
+    plt.savefig("score_histogram_CBIS-DDSM_SISI_TL_to_OPTIMAM_ES_threshold_0.1.png")
     # plt.show()
     plt.close()

@@ -27,7 +27,8 @@ wheels/
 *.egg
 
 resultados_imagenes/
-
+resultados_metricas/
+ALL_TPR-FPPI_SAVED_luego_borrar/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

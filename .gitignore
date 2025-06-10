@@ -29,6 +29,7 @@ wheels/
 resultados_imagenes/
 resultados_metricas/
 ALL_TPR-FPPI_SAVED_luego_borrar/
+modelos_finales/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

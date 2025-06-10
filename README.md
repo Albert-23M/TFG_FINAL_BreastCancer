@@ -26,3 +26,6 @@ El directorio COCO está vacío, ya que ahí es donde se guardan las imágenes p
 ## Configuración entorno
 Para configurar el entorno, hay que utilizar el archivo .yml, que define todas las dependencias necesarias.
 *conda env create -f environment.yml*
+
+## Link de los modelos entrenados
+https://drive.google.com/file/d/1z4jaKLjMl_-qXIokAtnCYtejcSwKTVte/view?usp=sharing

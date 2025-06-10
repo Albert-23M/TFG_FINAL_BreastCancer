@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from retinanet import coco_eval, csv_eval
 import matplotlib.pyplot as plt
 
+# Miramos si esta disponible CUDA
 print('CUDA available: {}'.format(torch.cuda.is_available()))
 
 def main(args=None):
